@@ -1,0 +1,2 @@
+source D:/Project/ESP32/freertos-warmup/build/gdbinit/symbols
+source D:/Project/ESP32/freertos-warmup/build/gdbinit/connect

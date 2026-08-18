@@ -1,0 +1,28 @@
+# ============================================================
+# sdkconfig.defaults
+# ============================================================
+# These settings get applied automatically when you first run
+# `idf.py build`. They enable the FreeRTOS trace facilities
+# we need for diagnostics (task stats, stack high-water marks).
+# ============================================================
+
+# --- FreeRTOS trace facility (needed for uxTaskGetSystemState) ---
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
+# --- Enable stats-tracking on per-task CPU time ---
+CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+
+# --- Watchdog (disabled for warmup; we'll enable in real project) ---
+CONFIG_ESP_TASK_WDT=n
+
+# --- Logging: default to INFO level ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# --- Don't color logs (easier to read in some terminals) ---
+CONFIG_LOG_COLORS=y
+
+# --- FreeRTOS: assert on bad API usage during dev (catches bugs early) ---
+CONFIG_FREERTOS_CHECK_TASK_STACK_OVERFLOW=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y

@@ -1,0 +1,14 @@
+{
+  "idf.currentSetup": "C:\\esp\\v6.0.2\\esp-idf",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3"
+  },
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=d:\\Project\\ESP32\\freertos-warmup\\build"
+  ],
+  "idf.portWin": "COM7",
+  "idf.flashType": "UART"
+}

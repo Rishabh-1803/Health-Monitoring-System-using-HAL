@@ -1,7 +1,0 @@
--mlongcalls
--fno-builtin-memcpy
--fno-builtin-memset
--fno-builtin-bzero
--mdisable-hardware-atomics
-"-specs=D:/Project/ESP32/hello_world/build/specs/picolibc.specs"
--fno-rtti

@@ -1,121 +1,108 @@
-Creative Commons Legal Code
+PROPRIETARY SOFTWARE AND INTELLECTUAL PROPERTY LICENSE
+ALL RIGHTS RESERVED
 
-CC0 1.0 Universal
+Copyright (c) 2026 Rishabh Shah
+All rights reserved.
 
-    CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE
-    LEGAL SERVICES. DISTRIBUTION OF THIS DOCUMENT DOES NOT CREATE AN
-    ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS
-    INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES
-    REGARDING THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS
-    PROVIDED HEREUNDER, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM
-    THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS PROVIDED
-    HEREUNDER.
+This repository, including but not limited to its source code, firmware,
+software, hardware descriptions, schematics, documentation, architecture,
+algorithms, designs, interfaces, configuration files, images, diagrams,
+and other original materials contained herein (collectively, the
+"Protected Materials"), is proprietary and confidential intellectual
+property of the copyright owner, except for third-party materials
+identified as being subject to their own licenses.
 
-Statement of Purpose
+NO LICENSE GRANTED
 
-The laws of most jurisdictions throughout the world automatically confer
-exclusive Copyright and Related Rights (defined below) upon the creator
-and subsequent owner(s) (each and all, an "owner") of an original work of
-authorship and/or a database (each, a "Work").
+No permission, license, authorization, or other right is granted to any
+person or entity to access, use, copy, reproduce, modify, adapt, translate,
+publish, distribute, sublicense, sell, lease, rent, transfer, disclose,
+commercialize, create derivative works from, incorporate into another
+work or product, deploy, host, mirror, or otherwise exploit any portion
+of the Protected Materials, except where expressly authorized in writing
+by the copyright owner.
 
-Certain owners wish to permanently relinquish those rights to a Work for
-the purpose of contributing to a commons of creative, cultural and
-scientific works ("Commons") that the public can reliably and without fear
-of later claims of infringement build upon, modify, incorporate in other
-works, reuse and redistribute as freely as possible in any form whatsoever
-and for any purposes, including without limitation commercial purposes.
-These owners may contribute to the Commons to promote the ideal of a free
-culture and the further production of creative, cultural and scientific
-works, or to gain reputation or greater distribution for their Work in
-part through the use and efforts of others.
+ACCESS TO THE REPOSITORY DOES NOT CONSTITUTE A LICENSE.
 
-For these and/or other purposes and motivations, and without any
-expectation of additional consideration or compensation, the person
-associating CC0 with a Work (the "Affirmer"), to the extent that he or she
-is an owner of Copyright and Related Rights in the Work, voluntarily
-elects to apply CC0 to the Work and publicly distribute the Work under its
-terms, with knowledge of his or her Copyright and Related Rights in the
-Work and the meaning and intended legal effect of CC0 on those rights.
+The availability of the Protected Materials through GitHub or any other
+website, repository, service, storage system, or distribution mechanism
+does not grant any intellectual property rights beyond those that cannot
+lawfully be excluded.
 
-1. Copyright and Related Rights. A Work made available under CC0 may be
-protected by copyright and related or neighboring rights ("Copyright and
-Related Rights"). Copyright and Related Rights include, but are not
-limited to, the following:
+PROHIBITED USE
 
-  i. the right to reproduce, adapt, distribute, perform, display,
-     communicate, and translate a Work;
- ii. moral rights retained by the original author(s) and/or performer(s);
-iii. publicity and privacy rights pertaining to a person's image or
-     likeness depicted in a Work;
- iv. rights protecting against unfair competition in regards to a Work,
-     subject to the limitations in paragraph 4(a), below;
-  v. rights protecting the extraction, dissemination, use and reuse of data
-     in a Work;
- vi. database rights (such as those arising under Directive 96/9/EC of the
-     European Parliament and of the Council of 11 March 1996 on the legal
-     protection of databases, and under any national implementation
-     thereof, including any amended or successor version of such
-     directive); and
-vii. other similar, equivalent or corresponding rights throughout the
-     world based on applicable law or treaty, and any national
-     implementations thereof.
+Without prior written permission from the copyright owner, no person or
+entity may:
 
-2. Waiver. To the greatest extent permitted by, but not in contravention
-of, applicable law, Affirmer hereby overtly, fully, permanently,
-irrevocably and unconditionally waives, abandons, and surrenders all of
-Affirmer's Copyright and Related Rights and associated claims and causes
-of action, whether now known or unknown (including existing as well as
-future claims and causes of action), in the Work (i) in all territories
-worldwide, (ii) for the maximum duration provided by applicable law or
-treaty (including future time extensions), (iii) in any current or future
-medium and for any number of copies, and (iv) for any purpose whatsoever,
-including without limitation commercial, advertising or promotional
-purposes (the "Waiver"). Affirmer makes the Waiver for the benefit of each
-member of the public at large and to the detriment of Affirmer's heirs and
-successors, fully intending that such Waiver shall not be subject to
-revocation, rescission, cancellation, termination, or any other legal or
-equitable action to disrupt the quiet enjoyment of the Work by the public
-as contemplated by Affirmer's express Statement of Purpose.
+1. Copy or reproduce the Protected Materials, in whole or in part.
+2. Modify, adapt, translate, or create derivative works from the
+   Protected Materials.
+3. Incorporate any portion of the Protected Materials into another
+   software, firmware, hardware, product, service, or publication.
+4. Distribute, publish, sublicense, sell, rent, lease, transfer, or
+   otherwise make the Protected Materials available to third parties.
+5. Use the Protected Materials for commercial, educational, academic,
+   research, personal, governmental, institutional, or production
+   purposes.
+6. Remove, alter, obscure, or bypass copyright, proprietary, attribution,
+   or other intellectual-property notices.
+7. Use the Protected Materials or substantial portions thereof to
+   develop, train, validate, benchmark, or improve another software,
+   firmware, hardware, machine-learning system, dataset, or technical
+   system, except with explicit written permission.
+8. Represent any modified, copied, or derivative material as an original
+   work of the person or entity using it.
+9. Create or distribute forks, mirrors, ports, clones, reimplementations
+   based on the Protected Materials, or substantially similar derivative
+   implementations, except with explicit written permission.
 
-3. Public License Fallback. Should any part of the Waiver for any reason
-be judged legally invalid or ineffective under applicable law, then the
-Waiver shall be preserved to the maximum extent permitted taking into
-account Affirmer's express Statement of Purpose. In addition, to the
-extent the Waiver is so judged Affirmer hereby grants to each affected
-person a royalty-free, non transferable, non sublicensable, non exclusive,
-irrevocable and unconditional license to exercise Affirmer's Copyright and
-Related Rights in the Work (i) in all territories worldwide, (ii) for the
-maximum duration provided by applicable law or treaty (including future
-time extensions), (iii) in any current or future medium and for any number
-of copies, and (iv) for any purpose whatsoever, including without
-limitation commercial, advertising or promotional purposes (the
-"License"). The License shall be deemed effective as of the date CC0 was
-applied by Affirmer to the Work. Should any part of the License for any
-reason be judged legally invalid or ineffective under applicable law, such
-partial invalidity or ineffectiveness shall not invalidate the remainder
-of the License, and in such case Affirmer hereby affirms that he or she
-will not (i) exercise any of his or her remaining Copyright and Related
-Rights in the Work or (ii) assert any associated claims and causes of
-action with respect to the Work, in either case contrary to Affirmer's
-express Statement of Purpose.
+INTELLECTUAL PROPERTY
 
-4. Limitations and Disclaimers.
+All rights in the Protected Materials are reserved to the copyright
+owner to the maximum extent permitted by applicable law.
 
- a. No trademark or patent rights held by Affirmer are waived, abandoned,
-    surrendered, licensed or otherwise affected by this document.
- b. Affirmer offers the Work as-is and makes no representations or
-    warranties of any kind concerning the Work, express, implied,
-    statutory or otherwise, including without limitation warranties of
-    title, merchantability, fitness for a particular purpose, non
-    infringement, or the absence of latent or other defects, accuracy, or
-    the present or absence of errors, whether or not discoverable, all to
-    the greatest extent permissible under applicable law.
- c. Affirmer disclaims responsibility for clearing rights of other persons
-    that may apply to the Work or any use thereof, including without
-    limitation any person's Copyright and Related Rights in the Work.
-    Further, Affirmer disclaims responsibility for obtaining any necessary
-    consents, permissions or other rights required for any use of the
-    Work.
- d. Affirmer understands and acknowledges that Creative Commons is not a
-    party to this document and has no duty or obligation with respect to
-    this CC0 or use of the Work.
+Nothing in this notice transfers, assigns, waives, licenses, or otherwise
+limits any copyright, trademark, trade-secret, patent, design right,
+database right, or other intellectual-property right owned or controlled
+by the copyright owner, except where such rights cannot legally be
+restricted.
+
+NO WARRANTY
+
+The Protected Materials are provided "AS IS", without warranty of any
+kind, express or implied, including but not limited to warranties of
+merchantability, fitness for a particular purpose, accuracy,
+non-infringement, reliability, or suitability.
+
+LIMITATION OF LIABILITY
+
+To the maximum extent permitted by applicable law, the copyright owner
+shall not be liable for any claim, loss, damage, liability, expense, or
+other consequence arising from or related to access to, inability to
+access, or unauthorized use of the Protected Materials.
+
+THIRD-PARTY MATERIALS
+
+This notice applies only to material owned or controlled by the copyright
+owner. Third-party software, libraries, firmware, SDKs, middleware,
+documentation, fonts, images, and other materials remain subject to their
+respective licenses and terms.
+
+NO IMPLIED PERMISSION
+
+Any permission not expressly granted in writing is expressly reserved.
+
+Written permission may be requested from the copyright owner before any
+otherwise prohibited use.
+
+CONTACT
+
+For licensing or permission requests, contact:
+
+Rishabh Shah
+Email: rishabh180306@gmail.com
+
+Unauthorized use, reproduction, distribution, modification,
+commercialization, or creation of derivative works may constitute
+infringement of applicable intellectual-property rights and may result
+in enforcement action to the extent permitted by applicable law.

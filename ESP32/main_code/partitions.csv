@@ -1,0 +1,15 @@
+# partitions.csv — ESP32-S3 flash partition table
+#
+# Layout (4 MB flash assumed; ESP32-S3-DevKit N16R8 has 16 MB — adjust if needed):
+#
+#   nvs       24 KB    (WiFi creds, config persistence)
+#   otadata   8 KB     (OTA slot info, even if we don't use OTA)
+#   factory   1 MB     (main application firmware)
+#   littlefs  512 KB   (local log storage when WiFi is down — Phase 9)
+#   spiffs    (none)   (we use LittleFS instead of SPIFFS — more reliable)
+#
+# Name,     Type, SubType, Offset,   Size,      Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+otadata,    data, ota,     0xF000,   0x2000,
+factory,    app,  factory, 0x20000,  0x100000,
+littlefs,   data, 0x82,    0x120000, 0x80000,

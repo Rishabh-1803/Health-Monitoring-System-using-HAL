@@ -78,3 +78,17 @@ Thumbs.db
 
 # To exclude Debug
 *.launch
+
+# ===== ESP-IDF / CMake build output (regenerable via `idf.py build`) =====
+build/
+sdkconfig.old
+managed_components/
+*.bin
+*.map
+
+# ===== STM32CubeIDE build output =====
+Debug/
+Release/
+
+# ===== Office lock files =====
+~$*

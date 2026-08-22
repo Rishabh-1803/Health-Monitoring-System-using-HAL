@@ -1,6 +1,0 @@
--mlongcalls
--fno-builtin-memcpy
--fno-builtin-memset
--fno-builtin-bzero
-"-specs=D:/Project/ESP32/freertos-warmup/build/specs/picolibc.specs"
--fno-rtti

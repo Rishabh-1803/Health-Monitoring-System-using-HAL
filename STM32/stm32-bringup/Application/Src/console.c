@@ -42,6 +42,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app_telemetry.h"   /* app_wdt_kick: keep the IWDG alive while a
+                               * human drives the interactive console. */
+
 /* usb_device.h declares MX_USB_DEVICE_Init but not the handle itself --
  * the handle is only defined in usb_device.c. ST's own generated
  * usbd_cdc_if.c reaches it with exactly this extern, so do the same
@@ -105,6 +108,11 @@ bool console_getchar(uint8_t *out)
 
 bool console_key_pressed(void)
 {
+    /* Every interactive wait polls this, so it doubles as the bench-mode
+     * watchdog keep-alive. While the telemetry app itself is the only
+     * other feeder, a hung app loop stops calling here and the IWDG
+     * resets the board -- which is the intended supervision. */
+    app_wdt_kick();
     return (s_rx_tail != s_rx_head);
 }
 
@@ -358,5 +366,6 @@ bool console_readline(char *buf, uint32_t buf_len, uint32_t timeout_ms)
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10));               /* poll, stay friendly */
+        app_wdt_kick();                              /* menu idle: stay fed */
     }
 }

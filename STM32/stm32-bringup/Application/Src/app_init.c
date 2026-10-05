@@ -41,6 +41,7 @@
  */
 
 #include "app_init.h"
+#include "app_telemetry.h"
 #include "bringup_config.h"
 #include "bsp.h"
 #include "console.h"
@@ -50,6 +51,15 @@
 #include "cmsis_os.h"
 #include "FreeRTOS.h"
 #include "task.h"
+
+/* Set to 0 to always land in the menu (the old Phase 2 behaviour). */
+#define BRINGUP_APP_FIRST       1
+
+/* How long to wait for a USB host before booting headless. */
+#define CONSOLE_BOOT_WAIT_MS    3000u
+
+/* Key window after the console is up: press any key for the menu. */
+#define MENU_KEY_WINDOW_MS      3000u
 
 static osThreadId_t s_bringup_task;
 
@@ -195,6 +205,7 @@ static void print_menu(void)
     (void)console_println("  9  UART heartbeat (Phase 2B)");
 #endif
     (void)console_println("  a  run everything in order");
+    (void)console_println("  r  run telemetry app (any key returns here)");
     (void)console_println("  p  show the wiring table");
     (void)console_println("  h  redisplay this menu");
     (void)console_println("");
@@ -263,22 +274,53 @@ static void bringup_task(void *argument)
 {
     (void)argument;
 
-    /* Wait for enumeration. LEDTask calls MX_USB_DEVICE_Init(), then the
-     * host needs a moment; printing before that faults. Give up after
-     * 10 s and carry on anyway -- writes fail safely, and if the board is
-     * running standalone the tests are still worth executing.
-     *
-     * The pins are already safe by this point: bsp_init() ran before the
-     * scheduler started, so nothing is floating while this waits. */
-    for (int i = 0; i < 200 && !console_is_ready(); i++) {
+    /* Wait for enumeration, bounded to 3 s: in standalone deployments
+     * there is no host at all and the telemetry application should not
+     * wait around for one. The pins are already safe by this point:
+     * bsp_init() ran before the scheduler started. */
+    for (int i = 0; i < 60 && !console_is_ready(); i++) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
-    /* A further settle: the port exists before a terminal has attached,
-     * and output sent in that gap is simply lost. */
-    vTaskDelay(pdMS_TO_TICKS(500));
 
-    print_banner();
-    print_pinout();
+#if BRINGUP_APP_FIRST
+    if (!console_is_ready()) {
+        /* Headless boot: no terminal will answer, so go straight to the
+         * telemetry application. If a host attaches later, the operator
+         * can still interrupt it into the menu with any keypress. */
+        app_telemetry_run();
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(300));
+
+        print_banner();
+        print_pinout();
+
+        (void)console_println("-- Press any key within 3 s for the bring-up menu.");
+        (void)console_println("   No key: the telemetry application starts (Phase 3).");
+        (void)console_println("");
+
+        bool want_menu = false;
+        for (int i = 0; i < 300; i++) {
+            if (console_key_pressed()) {
+                want_menu = true;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        if (!want_menu) {
+            app_telemetry_run();   /* a keypress inside exits to the menu */
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+#else
+    {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        print_banner();
+        print_pinout();
+    }
+#endif /* BRINGUP_APP_FIRST */
+
+    console_flush_rx();
 
 #if BRINGUP_TEST_I2C_SCAN
     /* Free, non-destructive, and wanted every time. */
@@ -332,6 +374,7 @@ static void bringup_task(void *argument)
             case '9': (void)run_one("uart hb",    test_uart_heartbeat_run); break;
 #endif
             case 'a': case 'A': run_all();      break;
+            case 'r': case 'R': app_telemetry_run(); break;
             case 'p': case 'P': print_pinout(); break;
             case 'h': case 'H': print_menu();   break;
             default:

@@ -1,25 +1,7 @@
-/**
- * @file    packet.c
- * @brief   Packet encoder + decoder implementation.
- *
- * SHARED CODE — byte-identical on STM32 and ESP32.
- *
- * The encoder builds a complete packet in a caller-supplied buffer.
- * The decoder is a streaming state machine fed one byte at a time.
- *
- * State machine (UART_PROTOCOL_SPEC.md §9):
- *
- *   WAIT_HEADER -> READ_LENGTH -> READ_TYPE -> READ_SEQ
- *      -> READ_PAYLOAD (if len > 0) -> READ_CRC -> READ_FOOTER
- *      -> validate CRC -> return PACKET_OK or PACKET_ERR_CRC
- *      -> back to WAIT_HEADER
- */
-
 #include "packet.h"
 #include "crc16.h"
 #include <string.h>
 
-/* ---- Decoder states ---- */
 enum {
     STATE_WAIT_HEADER  = 0,
     STATE_READ_LENGTH  = 1,
@@ -30,50 +12,35 @@ enum {
     STATE_READ_FOOTER  = 6,
 };
 
-/* ============================================================ */
-/* ENCODER                                                      */
-/* ============================================================ */
-
 int packet_encode(uint8_t *out_buf, size_t out_cap,
                   msg_type_t type, uint16_t seq,
                   const uint8_t *payload, uint8_t payload_len)
 {
     if (out_buf == NULL) return -1;
     if (payload_len > PACKET_MAX_PAYLOAD) return -2;
-
     size_t total = (size_t)payload_len + PACKET_OVERHEAD_SIZE;
     if (out_cap < total) return -3;
 
-    /* Header + Length + Type + Seq# (LE) */
     out_buf[0] = PACKET_HEADER_BYTE;
     out_buf[1] = payload_len;
     out_buf[2] = (uint8_t)type;
     out_buf[3] = (uint8_t)(seq & 0xFF);
     out_buf[4] = (uint8_t)((seq >> 8) & 0xFF);
 
-    /* Payload (if any) */
     if (payload_len > 0) {
         if (payload == NULL) return -1;
         memcpy(&out_buf[5], payload, payload_len);
     }
 
-    /* CRC over [header + len + type + seq + payload] */
     size_t crc_len = 5 + payload_len;
     uint16_t crc = crc16_ccitt(out_buf, crc_len);
 
-    /* CRC little-endian */
     out_buf[5 + payload_len]     = (uint8_t)(crc & 0xFF);
     out_buf[5 + payload_len + 1] = (uint8_t)((crc >> 8) & 0xFF);
-
-    /* Footer */
     out_buf[5 + payload_len + 2] = PACKET_FOOTER_BYTE;
 
     return (int)total;
 }
-
-/* ============================================================ */
-/* DECODER                                                      */
-/* ============================================================ */
 
 void packet_decoder_init(packet_decoder_t *dec)
 {
@@ -120,15 +87,15 @@ packet_result_t packet_decode_byte(packet_decoder_t *dec, uint8_t byte)
     case STATE_READ_TYPE:
         dec->type = byte;
         dec->state = STATE_READ_SEQ;
-        dec->crc_idx = 0;   /* reuse as seq-byte counter */
+        dec->crc_idx = 0;
         return PACKET_NEED_MORE;
 
     case STATE_READ_SEQ:
         if (dec->crc_idx == 0) {
-            dec->seq = byte;                        /* low byte */
+            dec->seq = byte;
             dec->crc_idx = 1;
         } else {
-            dec->seq |= ((uint16_t)byte) << 8;      /* high byte */
+            dec->seq |= ((uint16_t)byte) << 8;
             dec->crc_idx = 0;
             dec->payload_idx = 0;
             dec->state = (dec->length > 0) ? STATE_READ_PAYLOAD : STATE_READ_CRC;
@@ -145,23 +112,22 @@ packet_result_t packet_decode_byte(packet_decoder_t *dec, uint8_t byte)
 
     case STATE_READ_CRC:
         if (dec->crc_idx == 0) {
-            dec->crc_recv = byte;                   /* low byte */
+            dec->crc_recv = byte;
             dec->crc_idx = 1;
         } else {
-            dec->crc_recv |= ((uint16_t)byte) << 8; /* high byte */
+            dec->crc_recv |= ((uint16_t)byte) << 8;
             dec->crc_idx = 0;
             dec->state = STATE_READ_FOOTER;
         }
         return PACKET_NEED_MORE;
 
     case STATE_READ_FOOTER:
-        dec->state = STATE_WAIT_HEADER;   /* always reset for next packet */
+        dec->state = STATE_WAIT_HEADER;
 
         if (byte != PACKET_FOOTER_BYTE) {
             return PACKET_ERR_FOOTER;
         }
 
-        /* Validate CRC over [header + len + type + seq + payload] */
         uint8_t crc_buf[PACKET_MAX_PAYLOAD + 5];
         crc_buf[0] = PACKET_HEADER_BYTE;
         crc_buf[1] = dec->length;
@@ -173,7 +139,6 @@ packet_result_t packet_decode_byte(packet_decoder_t *dec, uint8_t byte)
         }
         uint16_t crc_calc = crc16_ccitt(crc_buf, 5 + dec->length);
 
-        /* Fill in the decoded packet struct */
         dec->decoded.type        = (msg_type_t)dec->type;
         dec->decoded.seq         = dec->seq;
         dec->decoded.payload_len = dec->length;

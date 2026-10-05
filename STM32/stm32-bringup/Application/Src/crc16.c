@@ -1,17 +1,8 @@
-/**
- * @file    crc16.c
- * @brief   CRC-16/CCITT bitwise reference implementation.
- *
- * SHARED CODE — byte-identical on STM32 and ESP32. This is the canonical
- * algorithm; every other CRC-16/CCITT implementation must match this exactly.
- */
-
 #include "crc16.h"
 
 uint16_t crc16_ccitt(const uint8_t *data, size_t len)
 {
     uint16_t crc = 0xFFFF;
-
     for (size_t i = 0; i < len; i++) {
         crc ^= (uint16_t)data[i] << 8;
         for (int b = 0; b < 8; b++) {
@@ -22,6 +13,5 @@ uint16_t crc16_ccitt(const uint8_t *data, size_t len)
             }
         }
     }
-
     return crc;
 }

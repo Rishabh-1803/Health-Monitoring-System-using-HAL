@@ -40,6 +40,8 @@
 #define BRINGUP_TEST_ADC          1   /* current sensor / any analog input  */
 #define BRINGUP_TEST_VIBRATION    1   /* SW-420 style digital vibration    */
 #define BRINGUP_TEST_ESP32_LINK   1   /* UART loopback / echo to the ESP32 */
+#define BRINGUP_TEST_PROTOCOL     1   /* Phase 2A: CRC + packet self-test  */
+#define BRINGUP_TEST_UART_HEARTBEAT 1 /* Phase 2B: real heartbeat exchange */
 
 /* ------------------------------------------------------------------ *
  *  Onboard LED -- PC13, active LOW.

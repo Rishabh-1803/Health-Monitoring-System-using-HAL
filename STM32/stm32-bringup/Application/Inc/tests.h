@@ -76,5 +76,7 @@ test_result_t test_ds18b20_run(void);     /* 1-Wire temperature          */
 test_result_t test_adc_run(void);         /* analog / current sensor     */
 test_result_t test_vibration_run(void);   /* digital vibration switch    */
 test_result_t test_esp32_link_run(void);  /* USART2 to the ESP32         */
+test_result_t test_protocol_run(void);    /* Phase 2A: CRC + packet self-test */
+test_result_t test_uart_heartbeat_run(void); /* Phase 2B: real heartbeat exchange */
 
 #endif /* TESTS_H */

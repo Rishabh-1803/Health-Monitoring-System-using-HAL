@@ -1,18 +1,30 @@
 /**
- * crc16.h — CRC-16/CCITT implementation (spec §7)
+ * @file    crc16.h
+ * @brief   CRC-16/CCITT (poly 0x1021, init 0xFFFF) — shared between STM32 and ESP32.
  *
- * Phase 1: skeleton only. Implementation: Phase 2.
- * Reference: docs/ARCHITECTURE.md and docs/UART_PROTOCOL_SPEC.md
+ * Used by the binary UART protocol to detect transmission errors.
+ * Both sides must compute the SAME value for the same input — this file
+ * is therefore byte-identical on both MCUs.
+ *
+ * Test vectors (verified):
+ *   ""              -> 0xFFFF
+ *   "123456789"     -> 0x29B1
+ *   "A"             -> 0xB915
+ *   {0xAA,0x00,0x01,0x00,0x00} -> 0x4AF6
  */
+
 #ifndef CRC16_H
 #define CRC16_H
 
 #include <stdint.h>
-#include <stdbool.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
+#include <stddef.h>
 
-/* TODO: Phase 2 — add public function declarations */
+/**
+ * Compute CRC-16/CCITT over a byte buffer.
+ * @param data  Pointer to data bytes
+ * @param len   Number of bytes
+ * @return      16-bit CRC value
+ */
+uint16_t crc16_ccitt(const uint8_t *data, size_t len);
 
 #endif /* CRC16_H */

@@ -188,6 +188,12 @@ static void print_menu(void)
 #if BRINGUP_TEST_ESP32_LINK
     (void)console_println("  7  ESP32 UART link");
 #endif
+#if BRINGUP_TEST_PROTOCOL
+    (void)console_println("  8  protocol self-test (Phase 2A)");
+#endif
+#if BRINGUP_TEST_UART_HEARTBEAT
+    (void)console_println("  9  UART heartbeat (Phase 2B)");
+#endif
     (void)console_println("  a  run everything in order");
     (void)console_println("  p  show the wiring table");
     (void)console_println("  h  redisplay this menu");
@@ -222,6 +228,8 @@ static void run_all(void)
         { "ADC",       test_adc_run        },
         { "vibration", test_vibration_run  },
         { "ESP32 link", test_esp32_link_run },
+        { "protocol",   test_protocol_run   },
+        { "uart hb",    test_uart_heartbeat_run },
     };
 
     for (unsigned i = 0; i < (sizeof(suite) / sizeof(suite[0])); i++) {
@@ -316,6 +324,12 @@ static void bringup_task(void *argument)
 #endif
 #if BRINGUP_TEST_ESP32_LINK
             case '7': (void)run_one("ESP32 link", test_esp32_link_run); break;
+#endif
+#if BRINGUP_TEST_PROTOCOL
+            case '8': (void)run_one("protocol",   test_protocol_run);   break;
+#endif
+#if BRINGUP_TEST_UART_HEARTBEAT
+            case '9': (void)run_one("uart hb",    test_uart_heartbeat_run); break;
 #endif
             case 'a': case 'A': run_all();      break;
             case 'p': case 'P': print_pinout(); break;

@@ -1,18 +1,30 @@
 # stm32-bringup — component self-test firmware
 
-A standalone STM32F411 Blackpill project whose only job is to answer one question per component:
-**is this thing wired up and alive?** It boots, scans the I2C bus, prints the pinout it expects, and
-then waits at a `bringup>` prompt over the board's own USB port. Each test prints the value it
-actually measured and a verdict, so a failure comes with a number attached rather than a guess.
+A standalone STM32F411 Blackpill project that does two jobs:
 
-This is deliberately not the application. It shares no code with `main_code` and is meant to be
-thrown away — or kept as a diagnostic — once the real firmware starts.
+1. **Bring-up testing** — answer one question per component: *is this
+   thing wired up and alive?* It scans the I2C bus, prints the pinout it
+   expects, and offers a `bringup>` prompt over the board's own USB port.
+   Each test prints the value it actually measured and a verdict, so a
+   failure comes a number attached rather than a guess.
+2. **The telemetry application** (`Application/Src/app_telemetry.c`) —
+   boots by default after a 3 s key window: samples DS18B20 / ACS712 /
+   SW-420, runs the hysteresis alarm engine, streams `MSG_TELEMETRY` to
+   the ESP32 at 460800 8N1, answers its commands with ACK/NAK, and feeds
+   the independent watchdog. Any keypress drops back to the menu; menu
+   item `r` runs the app again.
 
-## Status
+## Boot mode selection
 
-Written and statically verified. **Never compiled for ARM and never run on hardware.** See
-[Verification](#verification) for exactly what was and was not checked; do not treat any of it as
-working until it has been on the board.
+Power on with no key pressed (or nobody at the terminal) → telemetry
+application. Hold any key during the 3 s window after the banner →
+bring-up menu. Headless boards (no USB host) start the application
+after ~3 s. Inside the application, any key returns to the menu; from
+the menu, `r` restarts the application.
+
+The console wait/keep-alive paths feed the IWDG, so sitting in the menu
+on purpose never trips a reset; a hung application loop (which stops
+feeding) resets in ~33 s.
 
 ## Build and run
 

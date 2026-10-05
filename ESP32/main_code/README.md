@@ -1,124 +1,79 @@
-# ESP32-S3 Industrial Monitor — Project Skeleton
+# ESP32-S3 Industrial Monitor — Gateway + Dashboard
 
-This is the **ESP-IDF project skeleton** for the Industrial Equipment Health Monitoring project. Unlike the STM32 skeleton (which requires CubeMX generation), this is a **complete, buildable ESP-IDF project** that you can flash to your ESP32-S3 right now.
+ESP-IDF project (target `esp32s3`, built against **v6.0.2**) for the
+gateway half of the dual-MCU health monitor: it consumes the STM32's
+telemetry over UART, serves a live WebSocket dashboard, speaks a serial
+REPL, supervises the link with a two-layer watchdog, and persists
+history/config to flash.
 
-**Phase 1 status:** Skeleton only. `main.c` boots, prints a banner, and exits. All tasks/services/drivers are stubs with TODO comments indicating which phase will implement them.
+## Build & flash
 
----
-
-## What This Skeleton Provides
-
-- ✅ Project structure following the layered architecture from `docs/ARCHITECTURE.md`
-- ✅ `CMakeLists.txt` configured for ESP32-S3
-- ✅ `sdkconfig.defaults` with FreeRTOS trace facilities enabled
-- ✅ `partitions.csv` with reserved space for LittleFS log storage
-- ✅ Empty stub files for all 9 tasks, 7 services, 3 drivers, 3 protocol files
-- ✅ Compiles and flashes — prints "Phase 1 skeleton ready" on boot
-
-## What This Skeleton Does NOT Provide (Yet)
-
-- ❌ WiFi connection (Phase 7)
-- ❌ Web server (Phase 8)
-- ❌ UART driver to STM32 (Phase 2)
-- ❌ CLI parser (Phase 8)
-- ❌ WebSocket dashboard push (Phase 8)
-
----
-
-## Folder Layout
-
-```
-esp32-skeleton/
-├── CMakeLists.txt             Top-level ESP-IDF CMake
-├── sdkconfig.defaults         FreeRTOS + logging config
-├── partitions.csv             Flash partition table (NVS + factory + LittleFS)
-├── README.md                  This file
-└── main/
-    ├── CMakeLists.txt         Component CMake
-    ├── main.c                 app_main() entry point — Phase 1 stub
-    ├── project_config.h       FreeRTOS priorities, stack sizes, queue sizes
-    ├── Tasks/                 9 FreeRTOS task stubs
-    │   ├── task_wifi.{c,h}
-    │   ├── task_webserver.{c,h}
-    │   ├── task_dashboard.{c,h}
-    │   ├── task_uart_rx.{c,h}
-    │   ├── task_uart_tx.{c,h}
-    │   ├── task_logger.{c,h}
-    │   ├── task_cli.{c,h}
-    │   ├── task_diagnostics.{c,h}
-    │   └── task_watchdog.{c,h}
-    ├── Services/              7 service stubs
-    │   ├── wifi_manager.{c,h}
-    │   ├── http_server.{c,h}
-    │   ├── websocket_server.{c,h}
-    │   ├── dashboard_data.{c,h}
-    │   ├── command_dispatcher.{c,h}
-    │   ├── littlefs_storage.{c,h}
-    │   └── system_stats.{c,h}
-    ├── Drivers/               3 driver stubs
-    │   ├── uart_link.{c,h}     UART1 to STM32 (460800 8N1)
-    │   ├── cli.{c,h}           Command-line parser
-    │   └── led.{c,h}           Onboard RGB LED (if available)
-    ├── Protocol/              Same as STM32 side (shared code)
-    │   ├── packet.{c,h}
-    │   ├── crc16.{c,h}
-    │   └── protocol_types.h
-    └── Web/                   Dashboard static files (Phase 8)
-        ├── index.html         Placeholder
-        ├── style.css          Placeholder
-        └── app.js             Placeholder
-```
-
----
-
-## How to Use
-
-### Step 1 — Copy to Your ESP-IDF Workspace
-
-Move this folder to your ESP-IDF projects directory, e.g.:
-```
-C:\esp\projects\industrial-monitor-esp32\
-```
-
-### Step 2 — Open in VS Code
-
-File → Open Folder → select `industrial-monitor-esp32`
-
-### Step 3 — Set Target, Build, Flash
-
-In ESP-IDF Terminal:
 ```bash
-idf.py set-target esp32s3
+# Windows (ESP-IDF 6.x PowerShell/CMD):
+cd ESP32\main_code
+idf.py set-target esp32s3        # once, if sdkconfig is deleted
 idf.py build
-idf.py -p COMx flash monitor
-```
-(Replace `COMx` with your ESP32-S3's COM port)
-
-### Step 4 — Verify
-
-You should see on the monitor:
-```
-I (xxx) APP_MAIN: ========================================
-I (xxx) APP_MAIN:   Industrial Monitor ESP32-S3
-I (xxx) APP_MAIN:   Phase 1 — Skeleton Ready
-I (xxx) APP_MAIN: ========================================
-I (xxx) APP_MAIN: See docs/ARCHITECTURE.md and docs/UART_PROTOCOL_SPEC.md
-I (xxx) APP_MAIN: Phase 2 will implement the UART link to STM32
+idf.py -p COMx flash monitor     # 115200 8N1 for the console
 ```
 
-If you see this, your ESP-IDF toolchain is good and we can move to Phase 2.
+The console (logs + `monitor>` REPL) is on the USB-UART bridge port.
+First build fetches one managed component (`espressif/esp_littlefs`);
+if your build host is offline, set `HMS_USE_LITTLEFS 0` in
+`main/project_config.h`, delete `main/idf_component.yml`, and the
+system runs RAM+NVS-only (documented degradation).
 
----
+**Partition note:** `partitions.csv` reserves factory 2 MB + littlefs
+1 MB — fits 4 MB and 16 MB modules alike. If you keep an old
+`sdkconfig`, delete it once so `sdkconfig.defaults` (TWDT 15 s panic,
+runtime stats) applies.
 
-## Phase 2 Build Order
+## First boot (provisioning)
 
-When Phase 2 starts, we'll fill in this order (mirroring the STM32 side):
+With no stored credentials the ESP32 comes up as the access point
+**`monitor-setup`** (password `12345678`) and hijacks DNS so phones
+land on the captive portal. Open `http://192.168.4.1/`, enter your
+WiFi SSID/password, and the device reboots into station mode and
+prints its IP. Credentials live in NVS (`wifi set/clear` on the REPL
+manage them).
 
-1. `Protocol/crc16.c` + `Protocol/packet.c` + `Protocol/protocol_types.h` — protocol implementation
-2. `Drivers/uart_link.c` — UART1 driver with ring buffer (ESP-IDF UART driver API)
-3. `Tasks/task_uart_rx.c` + `Tasks/task_uart_tx.c` — packet exchange + heartbeat
-4. `Tasks/task_logger.c` — log queue + single-writer to USB-CDC JTAG
-5. `Tasks/task_watchdog.c` — smart watchdog
-6. **END-TO-END TEST**: STM32 ↔ ESP32 heartbeat exchange working
+## What runs on it
 
-Once Phase 2 is done, the two MCUs talk. Phases 3+ add sensors, web, CLI, dashboard on top.
+| Piece | Where |
+|-------|-------|
+| UART link (460800 8N1, GPIO17/18) | `main/Drivers/uart_link.c` |
+| Protocol layer (shared with STM32) | `main/Protocol/` |
+| Telemetry dispatch + state store | `main/Tasks/task_uart_rx.c`, `main/Services/dashboard_data.c` |
+| Acked commands (3x retry) | `main/Services/command_dispatcher.c` |
+| WiFi STA + provisioning AP + captive DNS | `main/Services/wifi_manager.c` |
+| HTTP + WebSocket + REST | `main/Services/http_server.c`, `websocket_server.c` |
+| Embedded dashboard (no CDN, vanilla JS charts) | `main/Web/` (EMBEDFILES) |
+| Serial REPL (status/thr/rate/led/wifi/logs/tasks/hist…) | `main/Drivers/cli.c` |
+| TWDT 15 s + supervisor escalation | `main/Tasks/task_watchdog.c` |
+| LittleFS history/config/incident log | `main/Services/littlefs_storage.c` |
+| CPU/watermark stats | `main/Services/system_stats.c` |
+
+REST API (all JSON): `GET /api/status`, `GET /api/history?win=60..3600`,
+`GET /api/logs`, `POST /api/threshold {id,value}`, `POST /api/rate {ms}`,
+`POST /api/led {id,on}`, `POST /api/alarm/reset`, `POST /api/reboot-stm32`,
+`GET|POST /api/wifi/...`. WebSocket push: `GET /ws` (1 Hz status).
+
+## Dashboard
+
+Dark industrial theme, zero dependencies: KPI cards, alarm banner,
+three live canvas charts (1m/5m/15m/1h windows, threshold lines,
+min/avg/max), controls (thresholds, sample rate, LED/relay, alarm
+reset, STM32 reboot), event log, and the WiFi provisioning form. Falls
+back to 2.5 s polling when the socket drops; refetches history on
+reconnect.
+
+## Verification status
+
+- Host unit tests (same protocol/json/ring sources):
+  `cd tests/host && make && ./test_host` → 51 checks.
+- All C files pass `gcc -fsyntax-only -Wall -Wextra` against stub
+  headers; JS validated with `node --check`.
+- Not yet compiled with the real xtensa toolchain or run on hardware —
+  run `docs/TEST_PLAN.md` §4–§8 on the bench.
+
+See `docs/ARCHITECTURE.md` (system design), `docs/UART_PROTOCOL_SPEC.md`
+(wire format), `docs/TEST_PLAN.md` (bring-up to soak).

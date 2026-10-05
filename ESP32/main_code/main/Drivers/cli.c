@@ -26,7 +26,6 @@
 #include "esp_console.h"
 #include "esp_log.h"
 #include "esp_system.h"
-#include "linenoise.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

@@ -93,3 +93,4 @@ Release/
 # ===== Office lock files =====
 ~$*
 tests/host/test_host
+__pycache__/

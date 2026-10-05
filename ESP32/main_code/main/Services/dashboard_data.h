@@ -80,6 +80,12 @@ void dashboard_data_set_link_stats(uint32_t rx_pkts, uint32_t crc_errors,
 void dashboard_data_note_threshold(uint8_t id, float value);
 void dashboard_data_note_sample_rate(uint16_t period_ms);
 
+/** Boot-time seeding from the persisted config. */
+void dashboard_data_set_config(const float thr[3], uint16_t period_ms);
+
+/** All three thresholds at once (for persistence). */
+void dashboard_data_get_thresholds(float out[3]);
+
 /* ================================================================== */
 /*  ESP32-side facts (wifi manager, stats sampler)                     */
 /* ================================================================== */

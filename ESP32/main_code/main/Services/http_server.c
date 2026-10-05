@@ -22,6 +22,8 @@
 #include "dashboard_data.h"
 #include "command_dispatcher.h"
 #include "wifi_manager.h"
+#include "logger.h"
+#include "littlefs_storage.h"
 #include "websocket_server.h"
 #include "json_util.h"
 #include "project_config.h"
@@ -99,6 +101,15 @@ static char *read_body(httpd_req_t *req, size_t max_len)
 
 /* HTTP budget for one acknowledged command (3 tries x 300 ms). */
 #define CMD_HTTP_TIMEOUT_MS  900
+
+static void persist_config(void)
+{
+    float thr[3];
+    dashboard_data_get_thresholds(thr);
+    (void)littlefs_storage_save_config(thr,
+                                       dashboard_data_get_sample_rate());
+}
+
 
 /* ================================================================== */
 /*  Static routes                                                     */
@@ -243,6 +254,7 @@ static esp_err_t h_api_threshold(httpd_req_t *req)
                                            CMD_HTTP_TIMEOUT_MS);
     if (r == CMD_OK) {
         dashboard_data_note_threshold((uint8_t)id, (float)value);
+        persist_config();
     }
     return send_ok(req, r == CMD_OK,
                    (r == CMD_NAKED) ? "rejected by stm32"
@@ -267,6 +279,7 @@ static esp_err_t h_api_rate(httpd_req_t *req)
                                              CMD_HTTP_TIMEOUT_MS);
     if (r == CMD_OK) {
         dashboard_data_note_sample_rate((uint16_t)ms);
+        persist_config();
     }
     return send_ok(req, r == CMD_OK, "no ack from stm32");
 }
@@ -345,6 +358,15 @@ static esp_err_t h_api_wifi_save(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t h_api_logs(httpd_req_t *req)
+{
+    char buf[3200];
+    size_t n = logger_build_json(buf, sizeof(buf), 32);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf,
+                           (n < sizeof(buf)) ? (int)n : (int)sizeof(buf) - 1);
+}
+
 static esp_err_t h_api_wifi_state(httpd_req_t *req)
 {
     char body[128];
@@ -398,6 +420,7 @@ esp_err_t http_server_start(void)
         { .uri = "/api/reboot-stm32", .method = HTTP_POST, .handler = h_api_reboot_stm32 },
         { .uri = "/api/wifi/save",  .method = HTTP_POST, .handler = h_api_wifi_save },
         { .uri = "/api/wifi/state", .method = HTTP_GET,  .handler = h_api_wifi_state },
+        { .uri = "/api/logs",      .method = HTTP_GET,  .handler = h_api_logs },
         { .uri = "/generate_204",   .method = HTTP_GET,  .handler = h_captive },
         { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = h_captive },
         { .uri = "/ncsi.txt",       .method = HTTP_GET,  .handler = h_captive },

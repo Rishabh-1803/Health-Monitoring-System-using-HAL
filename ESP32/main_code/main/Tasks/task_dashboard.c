@@ -5,13 +5,14 @@
  * Every second it:
  *   1. samples the latest telemetry into the history ring (charts data)
  *   2. collects link + command counters into the status store
- *   3. records ESP32-side facts (heap, uptime)
+ *   3. records ESP32-side facts (heap, uptime, CPU from system_stats)
  *   4. builds the status JSON and broadcasts it over WebSocket
  *
- * Also, once — the first time the STM32 link comes up after boot — it
- * re-pushes any locally-persisted settings so the two nodes agree on
- * thresholds and the sample rate. (Persistence itself lands with the
- * settings store; until then the push uses the in-memory mirror.)
+ * Once a minute it appends the current sample to the LittleFS history
+ * CSV (flash-friendly cadence), and once — the first time the STM32
+ * link comes up after boot — it re-pushes the persisted settings so
+ * the two nodes agree on thresholds and the sample rate, then asks
+ * for a RESP_STATUS to confirm the mirror.
  */
 
 #include "task_dashboard.h"
@@ -20,11 +21,14 @@
 #include "command_dispatcher.h"
 #include "task_uart_rx.h"
 #include "task_uart_tx.h"
+#include "system_stats.h"
+#include "littlefs_storage.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "TASK_DASH";
 
@@ -32,7 +36,10 @@ static const char *TAG = "TASK_DASH";
 #define DASH_PRIO     4
 #define DASH_PERIOD_MS 1000
 
+#define HIST_FLASH_EVERY_S  60u      /* one CSV line per minute       */
+
 static bool s_config_synced = false;
+static uint32_t s_flash_counter = 0u;
 
 static void push_link_stats(void)
 {
@@ -48,26 +55,24 @@ static void push_link_stats(void)
 
 static void sync_config_once(void)
 {
-    /* Wait until the STM32 is answering, then push the mirror once. */
+    /* Wait until the STM32 is answering, then push the mirror once and
+     * verify with a status request (its RESP_STATUS refreshes the
+     * mirror from the STM32's own view). */
     if (s_config_synced || !dashboard_data_link_up()
         || !dashboard_data_ever_linked()) {
         return;
     }
     s_config_synced = true;
 
-    bool any = false;
+    float thr[3];
+    dashboard_data_get_thresholds(thr);
     for (uint8_t id = 0; id < 3u; id++) {
-        float v = dashboard_data_get_threshold(id);
-        if (v > 0.0f) {
-            cmd_result_t r = command_set_threshold(id, v, 900u);
-            any = any || (r == CMD_OK);
-        }
+        (void)command_set_threshold(id, thr[id], 900u);
     }
-    uint16_t rate = dashboard_data_get_sample_rate();
-    (void)command_set_sample_rate(rate, 900u);
-    ESP_LOGI(TAG, "config sync %s (rate=%u ms)",
-             any ? "pushed" : "not acked — STM32 defaults stand",
-             (unsigned)rate);
+    (void)command_set_sample_rate(dashboard_data_get_sample_rate(), 900u);
+    (void)command_get_status(900u);
+    ESP_LOGI(TAG, "config sync pushed (rate=%u ms)",
+             (unsigned)dashboard_data_get_sample_rate());
 }
 
 static void task_dashboard(void *arg)
@@ -75,14 +80,28 @@ static void task_dashboard(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "dashboard task started (1 Hz)");
 
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+
     char json[2400];
     while (1) {
+        esp_task_wdt_reset(NULL);
+
         dashboard_data_sample_tick();
         push_link_stats();
         dashboard_data_note_esp_stats(esp_get_free_heap_size(),
                                       esp_get_minimum_free_heap_size(),
-                                      -1);    /* CPU: system_stats (P7)  */
+                                      system_stats_cpu_load());
         sync_config_once();
+
+        /* Flash history: one line per minute. */
+        if (++s_flash_counter >= HIST_FLASH_EVERY_S) {
+            s_flash_counter = 0u;
+            hr_sample_t last;
+            if (dashboard_data_copy_history_since(
+                    dashboard_data_uptime_ms() - 2000u, &last, 1u) == 1u) {
+                littlefs_storage_append_history(last.t_ms, last.v);
+            }
+        }
 
         size_t n = dashboard_data_build_status_json(json, sizeof(json));
         if (n > 0u && n < sizeof(json)) {

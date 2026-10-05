@@ -251,6 +251,31 @@ void dashboard_data_note_sample_rate(uint16_t period_ms)
     unlock();
 }
 
+void dashboard_data_set_config(const float thr[3], uint16_t period_ms)
+{
+    if (thr == NULL) {
+        return;
+    }
+    lock();
+    s_thr[0] = thr[0];
+    s_thr[1] = thr[1];
+    s_thr[2] = thr[2];
+    s_sample_ms = period_ms;
+    unlock();
+}
+
+void dashboard_data_get_thresholds(float out[3])
+{
+    if (out == NULL) {
+        return;
+    }
+    lock();
+    out[0] = s_thr[0];
+    out[1] = s_thr[1];
+    out[2] = s_thr[2];
+    unlock();
+}
+
 /* ================================================================== */
 /*  ESP32-side facts                                                  */
 /* ================================================================== */

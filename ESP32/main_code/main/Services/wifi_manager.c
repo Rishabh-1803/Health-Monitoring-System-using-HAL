@@ -11,6 +11,7 @@
 #include "wifi_manager.h"
 #include "project_config.h"
 #include "dashboard_data.h"
+#include "logger.h"
 
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -296,6 +297,9 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id,
         } else {
             ESP_LOGE(TAG, "STA gave up after %d retries — starting "
                      "provisioning AP", STA_MAX_RETRIES);
+            logger_logf(LOG_LVL_ERR, "wifi",
+                        "STA failed %d times — provisioning AP",
+                        STA_MAX_RETRIES);
             /* Reboot into provisioning mode: the cleanest mode switch,
              * because netif/wifi re-init on the AP side is exactly the
              * same path as a fresh boot without credentials. */
@@ -314,6 +318,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id,
         s_sta_retries = 0;
         set_state(WIFI_MGR_CONNECTED);
         ESP_LOGI(TAG, "got IP %s", s_ip);
+        logger_logf(LOG_LVL_INFO, "wifi", "connected, ip %s", s_ip);
         char empty[1] = { '\0' };
         dashboard_data_note_wifi(DASH_WIFI_CONNECTED, s_ssid, s_ip, 0);
         (void)empty;
@@ -384,6 +389,8 @@ static void start_provisioning(void)
 
     dns_start();
     set_state(WIFI_MGR_PROVISIONING);
+    logger_logf(LOG_LVL_WARN, "wifi", "provisioning AP up (%s)",
+                PROV_SSID);
     dashboard_data_note_wifi(DASH_WIFI_PROVISIONING, PROV_SSID, PROV_AP_IP, 0);
 
     ESP_LOGI(TAG, "");

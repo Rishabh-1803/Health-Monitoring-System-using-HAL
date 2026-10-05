@@ -27,6 +27,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "logger.h"
 #include <string.h>
 
 static const char *TAG = "UART_RX";
@@ -47,10 +49,16 @@ void task_uart_rx(void *arg)
     g_last_rx_tick = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     ESP_LOGI(TAG, "RX task started — listening for STM32 packets");
 
+    /* TWDT: this task must always return to its poll loop within the
+     * 15 s window — the watchdog's whole opinion of RX health. */
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+
     packet_decoder_t dec;
     packet_decoder_init(&dec);
 
     while (1) {
+        esp_task_wdt_reset(NULL);
+
         uint8_t byte;
         if (!uart_link_get_byte(&byte, RX_BYTE_TIMEOUT)) {
             continue;   /* timeout — loop back, nothing to decode */
@@ -88,6 +96,12 @@ void task_uart_rx(void *arg)
                     ESP_LOGW(TAG, "ALARM bit=0x%02X state=%u value=%d",
                              (unsigned)a.alarm_bit, (unsigned)a.state,
                              (int)a.value_at_trigger);
+                    logger_logf(LOG_LVL_WARN, "alarm",
+                                "%s bit=0x%02X value=%d/100",
+                                (a.state != 0u) ? "raise" : "clear",
+                                (unsigned)a.alarm_bit,
+                                (int)a.value_at_trigger);
+                    logger_flush();   /* incident-log durability path  */
                     dashboard_data_alarm_arrived(&a);
                 }
                 break;

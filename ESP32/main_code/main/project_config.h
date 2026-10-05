@@ -18,4 +18,12 @@
 #define HEARTBEAT_PERIOD_MS     1000
 #define COMM_FAIL_TIMEOUT_MS   5000
 
+/* ------------------------------------------------------------------ */
+/*  Optional flash storage (LittleFS). Set to 0 when the esp_littlefs
+ *  component is unavailable — the system degrades to RAM + NVS.       */
+/* ------------------------------------------------------------------ */
+#ifndef HMS_USE_LITTLEFS
+#define HMS_USE_LITTLEFS   1
+#endif
+
 #endif /* PROJECT_CONFIG_H */

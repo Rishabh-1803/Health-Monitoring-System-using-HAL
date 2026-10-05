@@ -20,6 +20,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "logger.h"
 
 static const char *TAG = "UART_TX";
 
@@ -35,11 +37,15 @@ void task_uart_tx(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "TX task started — sending heartbeat every %d ms", HB_PERIOD_MS);
 
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+
     uint16_t seq = 0;
     TickType_t last_wake = xTaskGetTickCount();
     bool comm_fail = false;
 
     while (1) {
+        esp_task_wdt_reset(NULL);
+
         /* Build and send a heartbeat packet */
         uint8_t pkt[PACKET_MAX_SIZE];
         int len = packet_encode(pkt, sizeof(pkt),
@@ -59,10 +65,13 @@ void task_uart_tx(void *arg)
             comm_fail = true;
             ESP_LOGE(TAG, "*** COMM FAIL *** (no packet from STM32 in %lu ms)",
                      (unsigned long)elapsed);
+            logger_logf(LOG_LVL_ERR, "link", "COMM FAIL (silent %lu ms)",
+                        (unsigned long)elapsed);
             dashboard_data_set_comm_fail(true);
         } else if (comm_fail && elapsed <= COMM_FAIL_MS) {
             comm_fail = false;
             ESP_LOGW(TAG, "*** COMM RESTORED ***");
+            logger_logf(LOG_LVL_INFO, "link", "COMM RESTORED");
             dashboard_data_set_comm_fail(false);
         }
 

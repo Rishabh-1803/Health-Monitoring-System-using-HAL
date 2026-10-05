@@ -38,6 +38,11 @@
 #include "wifi_manager.h"
 #include "http_server.h"
 #include "task_cli.h"
+#include "task_watchdog.h"
+#include "task_diagnostics.h"
+#include "task_logger.h"
+#include "logger.h"
+#include "littlefs_storage.h"
 
 static const char *TAG = "APP_MAIN";
 
@@ -46,7 +51,7 @@ void app_main(void)
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Industrial Monitor ESP32-S3");
-    ESP_LOGI(TAG, "  Phase 6 — CLI + live web dashboard");
+    ESP_LOGI(TAG, "  Phase 7 — Watchdog + diagnostics + storage");
     ESP_LOGI(TAG, "========================================");
 
     /* Chip info */
@@ -72,6 +77,7 @@ void app_main(void)
     /* 4. State stores must exist before the tasks that feed them. */
     dashboard_data_init();
     command_dispatcher_init();
+    logger_init();
 
     /* 5. NVS first (WiFi credentials live there), then the wifi stack.
      * task_webserver starts httpd once an IP (or the provisioning AP)
@@ -87,6 +93,19 @@ void app_main(void)
 
     wifi_manager_init();
 
+    /* 8. Optional flash storage + persisted settings. The mirror seeds
+     * from what was stored; task_dashboard pushes it to the STM32 once
+     * the link is up (and RESP_STATUS verifies the result). */
+    littlefs_storage_mount();
+    float thr[3];
+    uint16_t rate = 200u;
+    if (littlefs_storage_load_config(thr, &rate)) {
+        dashboard_data_set_config(thr, rate);
+        ESP_LOGI(TAG, "stored config applied (rate %u ms)", (unsigned)rate);
+    }
+    logger_logf(LOG_LVL_INFO, "boot",
+                "ESP32 booted, reset reason %d", (int)esp_reset_reason());
+
     /* 3. UART link + tasks. RX first so it is listening before TX. */
     uart_link_init();
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -98,6 +117,9 @@ void app_main(void)
     task_webserver_start();
     task_wifi_start();
     task_cli_start();
+    task_watchdog_start();
+    task_diagnostics_start();
+    task_logger_start();
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "All services running. Telemetry + dashboard active.");

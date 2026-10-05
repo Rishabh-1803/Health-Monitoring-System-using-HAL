@@ -19,6 +19,9 @@
 #include "websocket_server.h"
 #include "task_uart_rx.h"
 #include "task_uart_tx.h"
+#include "system_stats.h"
+#include "logger.h"
+#include "littlefs_storage.h"
 
 #include "esp_console.h"
 #include "esp_log.h"
@@ -159,10 +162,20 @@ static int cmd_uptime(int argc, char **argv)
 static int cmd_tasks(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    /* system_stats (Phase 7) adds watermarks + CPU; the REPL version
-     * lists the core facts via the FreeRTOS CLI hook when enabled. */
-    printf("task introspection arrives with system_stats (Phase 7).\n");
-    printf("use `status` for link + heap, `link` for counters.\n");
+    printf("cpu load: %d%%   min stack watermark: %lu B\n",
+           system_stats_cpu_load(),
+           (unsigned long)system_stats_min_stack_watermark());
+    system_stats_dump_tasks_console();
+    return 0;
+}
+
+static int cmd_logs(int argc, char **argv)
+{
+    int n = 20;
+    if (argc > 1) {
+        n = atoi(argv[1]);
+    }
+    logger_dump_console(n);
     return 0;
 }
 
@@ -226,6 +239,10 @@ static int cmd_thr(int argc, char **argv)
         print_cmd_result(r);
         if (r == CMD_OK) {
             dashboard_data_note_threshold(id, value);
+            float thr[3];
+            dashboard_data_get_thresholds(thr);
+            (void)littlefs_storage_save_config(
+                thr, dashboard_data_get_sample_rate());
         }
         return (r == CMD_OK) ? 0 : 1;
     }
@@ -248,6 +265,9 @@ static int cmd_rate(int argc, char **argv)
         print_cmd_result(r);
         if (r == CMD_OK) {
             dashboard_data_note_sample_rate((uint16_t)ms);
+            float thr[3];
+            dashboard_data_get_thresholds(thr);
+            (void)littlefs_storage_save_config(thr, (uint16_t)ms);
         }
         return (r == CMD_OK) ? 0 : 1;
     }
@@ -368,7 +388,8 @@ void cli_start(void)
     reg("link",         "UART link counters (rx/tx/crc/retries)",   NULL, cmd_link);
     reg("heap",         "free + minimum heap",                      NULL, cmd_heap);
     reg("uptime",       "milliseconds since boot",                  NULL, cmd_uptime);
-    reg("tasks",        "task introspection (Phase 7)",             NULL, cmd_tasks);
+    reg("tasks",        "task list with stack watermarks",          NULL, cmd_tasks);
+    reg("logs",         "last incident-log lines", "<n=20>",        cmd_logs);
     reg("hist",         "last N history samples", "<n=10>",         cmd_hist);
     reg("thr",          "show or set alarm thresholds", "[set t|c|v VALUE]", cmd_thr);
     reg("rate",         "set STM32 sample period (ms)", "<50..1000>", cmd_rate);

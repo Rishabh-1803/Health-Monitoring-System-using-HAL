@@ -15,5 +15,12 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 CONFIG_LOG_COLORS=y
 
-# Task watchdog (disabled for Phase 2B; enable in Phase 9)
-CONFIG_ESP_TASK_WDT=n
+# Task watchdog (Phase 7: 15 s, panic)
+
+# ===== Phase 7: watchdog + runtime statistics =====
+# Task watchdog: 15 s, panic -> reboot (supervisor task reconfigures anyway)
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
+CONFIG_ESP_TASK_WDT_PANIC=y
+# CPU load measurement for the dashboard (idle-task accounting)
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

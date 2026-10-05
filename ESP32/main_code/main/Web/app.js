@@ -138,7 +138,7 @@ function renderEvents(evs) {
   }
 }
 
-/* ================= history / charts (engine lands in Phase 8) ===== */
+/* ================= history / charts =============================== */
 
 async function refreshHistory() {
   try {
@@ -154,19 +154,158 @@ async function refreshHistory() {
   } catch (e) { /* offline; live appends continue */ }
 }
 
+/* Chart engine: zero dependencies, canvas 2D.
+ * Each channel gets a time-series plot with auto-scaled Y, grid,
+ * threshold line, min/max/avg and the live value. Redraws at 1 Hz. */
+
+const CHARTS = [
+  { cv: null, color: "#e8823e", unit: "C",  thrKey: "t", fmt: (v) => v.toFixed(2) },
+  { cv: null, color: "#4aa3ff", unit: "A",  thrKey: "c", fmt: (v) => v.toFixed(3) },
+  { cv: null, color: "#a06aff", unit: "g",  thrKey: "v", fmt: (v) => v.toFixed(2) },
+];
+
 const charts = {
+  init() {
+    CHARTS[0].cv = $("chart-temp");
+    CHARTS[1].cv = $("chart-cur");
+    CHARTS[2].cv = $("chart-vib");
+    window.addEventListener("resize", () => this.resize());
+    this.resize();
+  },
+
+  resize() {
+    for (const c of CHARTS) {
+      if (!c.cv) continue;
+      const dpr = window.devicePixelRatio || 1;
+      const w = c.cv.clientWidth || 560;
+      c.cv.width = Math.round(w * dpr);
+      c.cv.height = Math.round(170 * dpr);
+    }
+    this.redraw();
+  },
+
   redraw() {
-    /* Phase 8 fills this in — live values keep the KPI cards current. */
-    const stubs = [ $("chart-temp"), $("chart-cur"), $("chart-vib") ];
-    stubs.forEach((cv) => {
-      const ctx = cv.getContext("2d");
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      ctx.strokeStyle = "#273040";
-      ctx.strokeRect(0.5, 0.5, cv.width - 1, cv.height - 1);
+    if (!CHARTS[0].cv) this.init();
+    const now = S.lastStatus ? S.lastStatus.ts : 0;
+    const tEnd = now || (S.hist[0].length ? S.hist[0][S.hist[0].length - 1][0] : 0);
+    const tStart = tEnd - S.win * 1000;
+
+    for (let i = 0; i < CHARTS.length; i++) {
+      this.drawOne(CHARTS[i], S.hist[i], tStart, tEnd,
+                   S.lastStatus ? S.lastStatus.th[CHARTS[i].thrKey] : null);
+    }
+  },
+
+  drawOne(c, pts, tStart, tEnd, threshold) {
+    const cv = c.cv, ctx = cv.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.width / dpr, H = cv.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const padL = 42, padR = 10, padT = 10, padB = 20;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    /* --- value range over the visible window (data + threshold) --- */
+    let lo = Infinity, hi = -Infinity, n = 0, sum = 0;
+    for (const [t, v] of pts) {
+      if (t < tStart - 5000) continue;
+      n++; sum += v;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (threshold != null && isFinite(threshold)) {
+      lo = Math.min(lo, threshold);
+      hi = Math.max(hi, threshold);
+    }
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    if (hi - lo < 1e-6) { hi = lo + Math.max(Math.abs(lo) * 0.05, 0.01); }
+    const pad = (hi - lo) * 0.12;
+    lo -= pad; hi += pad;
+
+    const xOf = (t) => padL + ((t - tStart) / (tEnd - tStart)) * plotW;
+    const yOf = (v) => padT + plotH - ((v - lo) / (hi - lo)) * plotH;
+
+    /* --- grid + Y labels --- */
+    ctx.strokeStyle = "#232b38";
+    ctx.fillStyle = "#7d8899";
+    ctx.font = "10px sans-serif";
+    ctx.lineWidth = 1;
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+      const v = lo + ((hi - lo) * i) / ticks;
+      const y = Math.round(yOf(v)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(W - padR, y);
+      ctx.stroke();
+      ctx.fillText(c.fmt(v), 4, y + 3);
+    }
+
+    /* --- X labels: window-relative seconds --- */
+    const xt = 4;
+    for (let i = 0; i <= xt; i++) {
+      const f = i / xt;
+      const x = Math.round(padL + f * plotW) + 0.5;
+      ctx.strokeStyle = "#232b38";
+      ctx.beginPath();
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, padT + plotH);
+      ctx.stroke();
+      const s = Math.round((1 - f) * S.win);
+      const lab = s >= 90 ? Math.round(s / 60) + "m" : s + "s";
       ctx.fillStyle = "#7d8899";
-      ctx.font = "12px sans-serif";
-      ctx.fillText("charts arrive in phase 8", 20, cv.height / 2);
-    });
+      ctx.fillText(lab, x - 8, H - 6);
+    }
+
+    /* --- threshold line --- */
+    if (threshold != null && isFinite(threshold)
+        && threshold >= lo && threshold <= hi) {
+      ctx.strokeStyle = "#e8564e";
+      ctx.setLineDash([5, 4]);
+      const y = Math.round(yOf(threshold)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(W - padR, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    /* --- the series --- */
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    let started = false, lastX = 0, lastY = 0;
+    for (const [t, v] of pts) {
+      if (t < tStart - 5000) continue;
+      const x = xOf(t), y = yOf(v);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+      lastX = x; lastY = y;
+    }
+    ctx.stroke();
+
+    /* --- live dot + stats --- */
+    if (started) {
+      ctx.fillStyle = c.color;
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 3, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    if (n > 0) {
+      const mean = sum / n;
+      let mn = Infinity, mx = -Infinity;
+      for (const [t, v] of pts) {
+        if (t < tStart - 5000) continue;
+        if (v < mn) mn = v; if (v > mx) mx = v;
+      }
+      ctx.fillStyle = "#7d8899";
+      ctx.font = "10px sans-serif";
+      ctx.fillText(
+        "n " + n + "   min " + c.fmt(mn) + "   avg " + c.fmt(mean) +
+        "   max " + c.fmt(mx) + " " + c.unit,
+        padL + 6, padT + 11);
+    }
   },
 };
 

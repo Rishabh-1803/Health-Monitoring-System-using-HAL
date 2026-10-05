@@ -106,6 +106,22 @@ void dashboard_data_sample_tick(void);
 uint16_t dashboard_data_copy_history_since(uint32_t since_ms,
                                            hr_sample_t *out, uint16_t max);
 
+/** Plain-C snapshot for the CLI (no JSON involved). */
+typedef struct {
+    float    temp_c, current_a, vib_g;
+    uint8_t  alarm_bits, sensor_status;
+    uint16_t stm32_uptime_s;
+    uint32_t stm32_heap;
+    uint16_t stm32_cpu_10000;
+    bool     link_up;
+    bool     ever_linked;
+    uint32_t telemetry_age_ms;
+    float    thr[3];
+    uint16_t sample_period_ms;
+} dash_snapshot_t;
+
+void dashboard_data_snapshot(dash_snapshot_t *out);
+
 /** Milliseconds since boot. */
 uint32_t dashboard_data_uptime_ms(void);
 

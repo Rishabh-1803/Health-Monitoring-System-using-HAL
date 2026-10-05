@@ -37,6 +37,7 @@
 #include "command_dispatcher.h"
 #include "wifi_manager.h"
 #include "http_server.h"
+#include "task_cli.h"
 
 static const char *TAG = "APP_MAIN";
 
@@ -45,7 +46,7 @@ void app_main(void)
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Industrial Monitor ESP32-S3");
-    ESP_LOGI(TAG, "  Phase 5 — WiFi + live web dashboard");
+    ESP_LOGI(TAG, "  Phase 6 — CLI + live web dashboard");
     ESP_LOGI(TAG, "========================================");
 
     /* Chip info */
@@ -96,6 +97,7 @@ void app_main(void)
     task_dashboard_start();
     task_webserver_start();
     task_wifi_start();
+    task_cli_start();
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "All services running. Telemetry + dashboard active.");

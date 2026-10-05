@@ -1,18 +1,20 @@
 /**
- * cli.h — Command-line parser (help/stats/heap/taskinfo/queues/uptime/reboot/led/alarm)
+ * @file    cli.h
+ * @brief   USB-serial REPL: inspection + control commands.
  *
- * Phase 1: skeleton only. Implementation: Phase 8.
- * Reference: docs/ARCHITECTURE.md and docs/UART_PROTOCOL_SPEC.md
+ * Transport: UART0 (the USB-UART bridge, 115200) — the same channel
+ * the ESP_LOG output uses, which is exactly what the sdkconfig's
+ * CONFIG_ESP_CONSOLE_UART_DEFAULT selects.
+ *
+ * Every command that talks to the STM32 goes through the command
+ * dispatcher, so the CLI gets the same ACK/retry semantics as the web
+ * dashboard. Interactive budget: 1500 ms (3 x 500 ms attempts).
  */
+
 #ifndef CLI_H
 #define CLI_H
 
-#include <stdint.h>
-#include <stdbool.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-
-/* TODO: Phase 8 — add public function declarations */
+/** Register all commands and start the REPL task. Call once at boot. */
+void cli_start(void);
 
 #endif /* CLI_H */

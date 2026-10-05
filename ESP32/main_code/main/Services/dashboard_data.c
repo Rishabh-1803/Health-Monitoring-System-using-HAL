@@ -305,6 +305,31 @@ uint16_t dashboard_data_copy_history_since(uint32_t since_ms,
     return n;
 }
 
+void dashboard_data_snapshot(dash_snapshot_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    lock();
+    uint32_t t = now_ms();
+    out->temp_c = s_temp_c;
+    out->current_a = s_current_a;
+    out->vib_g = s_vib_g;
+    out->alarm_bits = s_alarm_bits;
+    out->sensor_status = s_sensor_status;
+    out->stm32_uptime_s = s_stm32_uptime;
+    out->stm32_heap = s_stm32_heap;
+    out->stm32_cpu_10000 = s_stm32_cpu_10000;
+    out->link_up = !s_comm_fail;
+    out->ever_linked = s_ever_linked;
+    out->telemetry_age_ms = s_ever_linked ? (t - s_last_tel_ms) : UINT32_MAX;
+    out->thr[0] = s_thr[0];
+    out->thr[1] = s_thr[1];
+    out->thr[2] = s_thr[2];
+    out->sample_period_ms = s_sample_ms;
+    unlock();
+}
+
 uint32_t dashboard_data_uptime_ms(void)
 {
     return now_ms();

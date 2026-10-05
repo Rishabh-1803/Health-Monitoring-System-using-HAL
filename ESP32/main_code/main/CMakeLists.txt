@@ -10,6 +10,7 @@ idf_component_register(
         "Tasks/task_dashboard.c"
         "Tasks/task_wifi.c"
         "Tasks/task_webserver.c"
+        "Tasks/task_cli.c"
         "Protocol/crc16.c"
         "Protocol/packet.c"
         "Protocol/protocol_selftest.c"
@@ -20,6 +21,7 @@ idf_component_register(
         "Services/wifi_manager.c"
         "Services/http_server.c"
         "Services/websocket_server.c"
+        "Drivers/cli.c"
     INCLUDE_DIRS
         "."
         "Drivers"

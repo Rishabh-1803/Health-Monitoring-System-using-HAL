@@ -99,3 +99,150 @@ void jsonw_bool(jsonw_t *w, int v)
 {
     jsonw_raw(w, v ? "true" : "false");
 }
+
+/* ================================================================== */
+/*  Request-body scanners                                             */
+/* ================================================================== */
+
+#include <stdlib.h>
+#include <ctype.h>
+
+/* Locate "key" followed by ':' — returns pointer to the char after the
+ * colon, or NULL. Tolerates whitespace between tokens. */
+static const char *find_value(const char *json, const char *key)
+{
+    if (json == NULL || key == NULL) {
+        return NULL;
+    }
+    size_t klen = strlen(key);
+    const char *p = json;
+    while ((p = strstr(p, key)) != NULL) {
+        /* Must be preceded by a quote and followed by a quote + colon. */
+        if (p > json && p[-1] == '"'
+            && p[klen] == '"') {
+            const char *q = p + klen + 1;
+            while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') {
+                q++;
+            }
+            if (*q == ':') {
+                q++;
+                while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') {
+                    q++;
+                }
+                return q;
+            }
+        }
+        p += klen;
+    }
+    return NULL;
+}
+
+int json_find_long(const char *json, const char *key, long long *out)
+{
+    const char *v = find_value(json, key);
+    if (v == NULL || *v == '\0') {
+        return -1;
+    }
+    char *end = NULL;
+    long long val = strtoll(v, &end, 10);
+    if (end == v) {
+        return -1;
+    }
+    if (out != NULL) {
+        *out = val;
+    }
+    return 0;
+}
+
+int json_find_double(const char *json, const char *key, double *out)
+{
+    const char *v = find_value(json, key);
+    if (v == NULL || *v == '\0') {
+        return -1;
+    }
+    char *end = NULL;
+    double val = strtod(v, &end);
+    if (end == v) {
+        return -1;
+    }
+    if (out != NULL) {
+        *out = val;
+    }
+    return 0;
+}
+
+int json_find_str(const char *json, const char *key, char *out, size_t cap)
+{
+    const char *v = find_value(json, key);
+    if (v == NULL || *v != '"') {
+        return -1;
+    }
+    v++;
+    size_t n = 0;
+    while (*v != '"') {
+        if (*v == '\0') {
+            return -1;
+        }
+        char c = *v;
+        if (c == '\\' && v[1] != '\0') {
+            v++;
+            switch (*v) {
+                case 'n':  c = '\n'; break;
+                case 'r':  c = '\r'; break;
+                case 't':  c = '\t'; break;
+                case '"':  c = '"';  break;
+                case '\\': c = '\\'; break;
+                default:   c = *v;  break;
+            }
+        }
+        if (n + 1u >= cap) {
+            return -2;
+        }
+        out[n++] = c;
+        v++;
+    }
+    out[n] = '\0';
+    return 0;
+}
+
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') { return c - '0'; }
+    if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+    if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+    return -1;
+}
+
+int urlform_find(const char *body, const char *key, char *out, size_t cap)
+{
+    if (body == NULL || key == NULL || out == NULL || cap == 0u) {
+        return -1;
+    }
+    size_t klen = strlen(key);
+    const char *p = body;
+    while ((p = strstr(p, key)) != NULL) {
+        if ((p == body || p[-1] == '&' || p[-1] == '?')
+            && p[klen] == '=') {
+            const char *v = p + klen + 1;
+            size_t n = 0u;
+            while (*v != '\0' && *v != '&') {
+                char c = *v;
+                if (c == '+') {
+                    c = ' ';
+                } else if (c == '%' && hexval(v[1]) >= 0 && hexval(v[2]) >= 0) {
+                    c = (char)((hexval(v[1]) << 4) | hexval(v[2]));
+                    v += 2;
+                }
+                if (n + 1u >= cap) {
+                    return -2;
+                }
+                out[n++] = c;
+                v++;
+            }
+            out[n] = '\0';
+            return 0;
+        }
+        p += klen;
+    }
+    return -1;
+}

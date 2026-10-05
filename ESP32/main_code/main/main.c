@@ -22,15 +22,21 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "uart_link.h"
 #include "task_uart_tx.h"
 #include "task_uart_rx.h"
+#include "task_dashboard.h"
+#include "task_wifi.h"
+#include "task_webserver.h"
 #include "protocol_selftest.h"
 #include "dashboard_data.h"
 #include "command_dispatcher.h"
+#include "wifi_manager.h"
+#include "http_server.h"
 
 static const char *TAG = "APP_MAIN";
 
@@ -39,7 +45,7 @@ void app_main(void)
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  Industrial Monitor ESP32-S3");
-    ESP_LOGI(TAG, "  Phase 4 — Telemetry pipeline");
+    ESP_LOGI(TAG, "  Phase 5 — WiFi + live web dashboard");
     ESP_LOGI(TAG, "========================================");
 
     /* Chip info */
@@ -66,6 +72,20 @@ void app_main(void)
     dashboard_data_init();
     command_dispatcher_init();
 
+    /* 5. NVS first (WiFi credentials live there), then the wifi stack.
+     * task_webserver starts httpd once an IP (or the provisioning AP)
+     * exists, and task_dashboard pushes 1 Hz status to browsers. */
+    esp_err_t nvs = nvs_flash_init();
+    if (nvs == ESP_ERR_NVS_NO_FREE_PAGES
+        || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS needs reformat — erasing (wifi creds lost)");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs);
+
+    wifi_manager_init();
+
     /* 3. UART link + tasks. RX first so it is listening before TX. */
     uart_link_init();
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -73,8 +93,12 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(50));
     task_uart_tx_start();
 
+    task_dashboard_start();
+    task_webserver_start();
+    task_wifi_start();
+
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Telemetry pipeline running.");
+    ESP_LOGI(TAG, "All services running. Telemetry + dashboard active.");
     ESP_LOGI(TAG, "Wire: ESP32 GPIO17 (TX) -> STM32 PA3 (RX)");
     ESP_LOGI(TAG, "       ESP32 GPIO18 (RX) <- STM32 PA2 (TX)");
     ESP_LOGI(TAG, "       GND <-> GND");

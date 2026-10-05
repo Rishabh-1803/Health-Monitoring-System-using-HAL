@@ -1,3 +1,164 @@
-/* Phase 1 placeholder. Phase 8 will add the real dashboard styling. */
-body { font-family: sans-serif; margin: 2em; }
-h1 { color: #333; }
+/* Industrial Monitor dashboard — dark industrial theme, zero deps. */
+
+:root {
+  --bg:      #0e1116;
+  --panel:   #161b23;
+  --panel2:  #1c232e;
+  --line:    #273040;
+  --text:    #d7dde6;
+  --muted:   #7d8899;
+  --accent:  #35c58f;
+  --accent2: #4aa3ff;
+  --warn:    #e8b93e;
+  --danger:  #e8564e;
+  --temp:    #e8823e;
+  --cur:     #4aa3ff;
+  --vib:     #a06aff;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  padding-bottom: 40px;
+}
+
+/* ---------- header / footer ---------- */
+
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 18px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 5;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { font-size: 16px; font-weight: 600; letter-spacing: .3px; }
+.dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--danger); display: inline-block;
+}
+.dot.up { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.hdr-right { display: flex; gap: 8px; }
+.chip {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 10px; font-size: 12px; color: var(--muted);
+}
+
+footer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between;
+  background: var(--panel); border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 11px; padding: 6px 18px;
+}
+
+/* ---------- cards ---------- */
+
+main, #live { max-width: 1100px; margin: 0 auto; padding: 14px; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.card h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 10px;
+  text-transform: uppercase; letter-spacing: .8px; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 12px; margin-bottom: 14px;
+}
+.kpi { text-align: left; padding: 12px 14px; }
+.kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+.kpi-value { font-size: 30px; font-weight: 600; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.kpi-value.small { font-size: 20px; }
+.kpi-value .unit { font-size: 13px; color: var(--muted); margin-left: 3px; font-weight: 400; }
+.kpi-sub { font-size: 11px; color: var(--muted); }
+
+#kpi-temp .kpi-value span:first-child { color: var(--temp); }
+#kpi-cur  .kpi-value span:first-child { color: var(--cur); }
+#kpi-vib  .kpi-value span:first-child { color: var(--vib); }
+#kpi-alm  .kpi-value span:first-child { color: var(--muted); }
+.kpi.alert .kpi-value span:first-child { color: var(--danger) !important; }
+
+/* ---------- alarm banner ---------- */
+
+.alarm-banner {
+  background: rgba(232, 86, 78, .14);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 600; letter-spacing: .5px;
+  margin-bottom: 14px;
+}
+
+/* ---------- charts ---------- */
+
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.section-head h2 { margin-bottom: 0; }
+.win-btns button {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px; margin-left: 4px;
+}
+.win-btns button.sel { background: var(--accent); color: #07120d; border-color: var(--accent); font-weight: 600; }
+
+.chart-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.chart-title { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.chart-title .u { color: var(--muted); opacity: .7; }
+canvas { width: 100%; height: 170px; background: var(--panel2); border-radius: 6px; border: 1px solid var(--line); }
+
+/* ---------- controls ---------- */
+
+.controls { display: flex; flex-wrap: wrap; gap: 24px; }
+.ctl-block h3 { font-size: 12px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; }
+.ctl-block label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text); }
+.ctl-block input {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 4px; padding: 5px 8px; width: 90px; font: inherit;
+}
+.ctl-block input:focus { outline: 1px solid var(--accent2); }
+
+button {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 4px; padding: 6px 14px; cursor: pointer; font: inherit; font-size: 13px;
+}
+button:hover { border-color: var(--accent2); }
+button.primary { background: var(--accent); color: #07120d; border-color: var(--accent); font-weight: 600; }
+button.primary:hover { filter: brightness(1.1); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button.on { background: var(--warn); color: #171307; border-color: var(--warn); font-weight: 600; }
+.btn-grid { display: grid; grid-template-columns: 140px 140px; gap: 8px; }
+.msg { font-size: 12px; color: var(--muted); display: block; min-height: 16px; margin-top: 6px; }
+.msg.ok  { color: var(--accent); }
+.msg.err { color: var(--danger); }
+
+/* ---------- event table ---------- */
+
+.ev-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ev-table th {
+  text-align: left; color: var(--muted); font-weight: 500;
+  border-bottom: 1px solid var(--line); padding: 4px 8px;
+}
+.ev-table td { padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.ev-table tr.raise td:nth-child(2) { color: var(--danger); }
+.ev-table tr.clear td:nth-child(2) { color: var(--accent); }
+
+/* ---------- wifi setup ---------- */
+
+#wifi-setup .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+#wifi-setup input {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 4px; padding: 7px 10px; font: inherit; min-width: 180px;
+}
+
+@media (max-width: 640px) {
+  .controls { gap: 14px; }
+  .btn-grid { grid-template-columns: 1fr; }
+}

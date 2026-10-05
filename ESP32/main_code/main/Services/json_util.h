@@ -43,3 +43,22 @@ void jsonw_bool(jsonw_t *w, int v);
 
 
 #endif /* JSON_UTIL_H */
+
+/* ================================================================== */
+/*  Tiny request-body scanners (sufficient for our fixed POST bodies)  */
+/* ================================================================== */
+
+/** Find "key":<integer>. Returns 0 and writes *out on success, -1 if absent. */
+int json_find_long(const char *json, const char *key, long long *out);
+
+/** Find "key":<number> (float). Returns 0 and writes *out, -1 if absent. */
+int json_find_double(const char *json, const char *key, double *out);
+
+/**
+ * Find "key":"string". Copies (unescaped) into out. Returns 0 on success,
+ * -1 if absent, -2 if the destination is too small.
+ */
+int json_find_str(const char *json, const char *key, char *out, size_t cap);
+
+/** URL-decode "a=b&c=d" bodies: find key, decode into out. -1 absent. */
+int urlform_find(const char *body, const char *key, char *out, size_t cap);

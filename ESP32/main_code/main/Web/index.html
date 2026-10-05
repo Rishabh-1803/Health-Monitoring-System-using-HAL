@@ -1,13 +1,154 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Industrial Monitor</title>
-    <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Industrial Monitor</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Industrial Monitor Dashboard</h1>
-    <p>Phase 1 skeleton. Phase 8 will implement the live dashboard.</p>
-    <script src="app.js"></script>
+
+<header>
+  <div class="brand">
+    <span class="dot" id="ws-dot"></span>
+    <h1>Equipment Health Monitor</h1>
+  </div>
+  <div class="hdr-right">
+    <span id="hdr-wifi" class="chip">wifi</span>
+    <span id="hdr-clock" class="chip">--:--:--</span>
+  </div>
+</header>
+
+<!-- Shown only while the ESP32 runs its provisioning AP -->
+<section id="wifi-setup" class="card hidden">
+  <h2>WiFi setup</h2>
+  <p class="muted">
+    No stored WiFi credentials. The ESP32 is running as the access point
+    <b>monitor-setup</b>. Enter your network credentials below — the ESP32
+    saves them and reboots into station mode.
+  </p>
+  <form id="wifi-form" class="form-row">
+    <input id="wifi-ssid" type="text" placeholder="SSID" maxlength="32" required>
+    <input id="wifi-pass" type="password" placeholder="password" maxlength="64" required>
+    <button type="submit" class="primary">Save &amp; reboot</button>
+  </form>
+</section>
+
+<!-- Live view -->
+<div id="live">
+
+  <div id="alarm-banner" class="alarm-banner hidden">
+    <span id="alarm-banner-text">ALARMS ACTIVE</span>
+  </div>
+
+  <section class="cards">
+    <div class="card kpi" id="kpi-temp">
+      <div class="kpi-label">Temperature</div>
+      <div class="kpi-value"><span id="v-temp">--</span><span class="unit">°C</span></div>
+      <div class="kpi-sub" id="kpi-temp-sub">thr --</div>
+    </div>
+    <div class="card kpi" id="kpi-cur">
+      <div class="kpi-label">Current</div>
+      <div class="kpi-value"><span id="v-cur">--</span><span class="unit">A</span></div>
+      <div class="kpi-sub" id="kpi-cur-sub">thr --</div>
+    </div>
+    <div class="card kpi" id="kpi-vib">
+      <div class="kpi-label">Vibration <span class="muted">(est.)</span></div>
+      <div class="kpi-value"><span id="v-vib">--</span><span class="unit">g</span></div>
+      <div class="kpi-sub" id="kpi-vib-sub">thr --</div>
+    </div>
+    <div class="card kpi" id="kpi-alm">
+      <div class="kpi-label">Alarms</div>
+      <div class="kpi-value"><span id="v-alm">--</span></div>
+      <div class="kpi-sub" id="v-alm-names">&nbsp;</div>
+    </div>
+    <div class="card kpi">
+      <div class="kpi-label">STM32</div>
+      <div class="kpi-value small"><span id="v-stm-cpu">--%</span></div>
+      <div class="kpi-sub"><span id="v-stm-heap">-- KB</span> · up <span id="v-stm-up">--</span></div>
+    </div>
+    <div class="card kpi">
+      <div class="kpi-label">ESP32</div>
+      <div class="kpi-value small"><span id="v-esp-cpu">--%</span></div>
+      <div class="kpi-sub"><span id="v-esp-heap">-- KB</span> · RSSI <span id="v-esp-rssi">--</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="section-head">
+      <h2>History</h2>
+      <div class="win-btns" id="win-btns">
+        <button data-win="60">1m</button>
+        <button data-win="300" class="sel">5m</button>
+        <button data-win="900">15m</button>
+        <button data-win="3600">1h</button>
+      </div>
+    </div>
+    <div class="chart-grid">
+      <div class="chart-cell">
+        <div class="chart-title">Temperature <span class="u">°C</span></div>
+        <canvas id="chart-temp" width="560" height="170"></canvas>
+      </div>
+      <div class="chart-cell">
+        <div class="chart-title">Current <span class="u">A</span></div>
+        <canvas id="chart-cur" width="560" height="170"></canvas>
+      </div>
+      <div class="chart-cell">
+        <div class="chart-title">Vibration <span class="u">g (est.)</span></div>
+        <canvas id="chart-vib" width="560" height="170"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Controls</h2>
+    <div class="controls">
+
+      <form id="thr-form" class="ctl-block">
+        <h3>Thresholds</h3>
+        <label>Temp <input id="thr-temp" type="number" step="0.5" min="0" max="125"> °C</label>
+        <label>Current <input id="thr-cur" type="number" step="0.1" min="0" max="30"> A</label>
+        <label>Vibration <input id="thr-vib" type="number" step="0.05" min="0" max="10"> g</label>
+        <button type="submit" class="primary">Apply</button>
+        <span id="thr-msg" class="msg"></span>
+      </form>
+
+      <form id="rate-form" class="ctl-block">
+        <h3>Sample rate</h3>
+        <label>Period <input id="rate-ms" type="number" step="50" min="50" max="1000"> ms</label>
+        <button type="submit" class="primary">Apply</button>
+        <span id="rate-msg" class="msg"></span>
+      </form>
+
+      <div class="ctl-block">
+        <h3>Outputs</h3>
+        <div class="btn-grid">
+          <button id="btn-led-g">LED green</button>
+          <button id="btn-led-r">Relay (red)</button>
+          <button id="btn-alarm-reset">Reset alarms</button>
+          <button id="btn-reboot-stm32" class="danger">Reboot STM32</button>
+        </div>
+        <span id="ctl-msg" class="msg"></span>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Event log</h2>
+    <table class="ev-table">
+      <thead><tr><th>Time</th><th>Event</th><th>Value</th></tr></thead>
+      <tbody id="ev-body"></tbody>
+    </table>
+  </section>
+
+</div><!-- /live -->
+
+<footer>
+  <span>STM32 ↔ ESP32-S3 · 460800 8N1 · CRC-16/CCITT</span>
+  <span id="ftr-link">link --</span>
+</footer>
+
+<script src="app.js"></script>
 </body>
 </html>

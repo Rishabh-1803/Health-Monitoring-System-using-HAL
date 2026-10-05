@@ -5,14 +5,17 @@
  * Uses vTaskDelayUntil for exact 1 Hz timing (no drift, even under load).
  * Sequence number wraps from 65535 to 0 automatically (uint16_t overflow).
  *
- * Also checks comm-fail: if no packet received from STM32 in 5 seconds,
- * logs a warning. When a packet arrives again, logs recovery.
+ * Comm-fail detection: if no packet is received from the STM32 in 5 s,
+ * the state flips (into dashboard_data, which raises the comm-fail
+ * alarm and records an event) and recovery flips it back.
  */
 
 #include "task_uart_tx.h"
+#include "task_uart_rx.h"
 #include "uart_link.h"
 #include "packet.h"
 #include "protocol_types.h"
+#include "dashboard_data.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,9 +26,9 @@ static const char *TAG = "UART_TX";
 #define TX_STACK_SIZE   2048
 #define TX_PRIORITY      4
 #define HB_PERIOD_MS     1000
+#define COMM_FAIL_MS     5000
 
-/* Shared with task_uart_rx via this extern — declared in task_uart_rx.c */
-extern volatile uint32_t g_last_rx_tick;
+static uint32_t s_tx_packets;
 
 void task_uart_tx(void *arg)
 {
@@ -42,19 +45,25 @@ void task_uart_tx(void *arg)
         int len = packet_encode(pkt, sizeof(pkt),
                                  MSG_HEARTBEAT, seq, NULL, 0);
         if (len > 0 && uart_link_send(pkt, (uint32_t)len)) {
-            ESP_LOGI(TAG, "Heartbeat sent (seq=%u)", (unsigned)seq);
+            s_tx_packets++;
         } else {
             ESP_LOGE(TAG, "Failed to send heartbeat (seq=%u)", (unsigned)seq);
         }
         seq++;
 
-        /* Check comm-fail (peer = STM32) */
+        /* Comm-fail state machine (peer = STM32). The dashboard mirrors
+         * it as the comm-fail alarm bit + event log entries. */
         uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         uint32_t elapsed = now - g_last_rx_tick;
-        if (!comm_fail && elapsed > 5000) {
+        if (!comm_fail && elapsed > COMM_FAIL_MS) {
             comm_fail = true;
             ESP_LOGE(TAG, "*** COMM FAIL *** (no packet from STM32 in %lu ms)",
                      (unsigned long)elapsed);
+            dashboard_data_set_comm_fail(true);
+        } else if (comm_fail && elapsed <= COMM_FAIL_MS) {
+            comm_fail = false;
+            ESP_LOGW(TAG, "*** COMM RESTORED ***");
+            dashboard_data_set_comm_fail(false);
         }
 
         /* Wait exactly 1 second (vTaskDelayUntil prevents drift) */
@@ -65,4 +74,9 @@ void task_uart_tx(void *arg)
 void task_uart_tx_start(void)
 {
     xTaskCreate(task_uart_tx, "uart_tx", TX_STACK_SIZE, NULL, TX_PRIORITY, NULL);
+}
+
+uint32_t task_uart_tx_get_packets(void)
+{
+    return s_tx_packets;
 }

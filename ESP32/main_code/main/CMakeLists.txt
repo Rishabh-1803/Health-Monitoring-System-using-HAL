@@ -1,5 +1,5 @@
 # main/CMakeLists.txt — ESP-IDF main component
-# Phase 2B — Industrial Monitor ESP32-S3
+# Industrial Monitor ESP32-S3
 
 idf_component_register(
     SRCS
@@ -10,9 +10,14 @@ idf_component_register(
         "Protocol/crc16.c"
         "Protocol/packet.c"
         "Protocol/protocol_selftest.c"
+        "Services/history_ring.c"
+        "Services/json_util.c"
+        "Services/dashboard_data.c"
+        "Services/command_dispatcher.c"
     INCLUDE_DIRS
         "."
         "Drivers"
         "Tasks"
         "Protocol"
+        "Services"
 )

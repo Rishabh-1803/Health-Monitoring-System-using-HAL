@@ -7,6 +7,8 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <string.h>
 
 static const char *TAG = "UART_LINK";
@@ -17,6 +19,12 @@ static const char *TAG = "UART_LINK";
 #define UART_BAUD_RATE      460800
 #define UART_BUF_SIZE       512
 #define UART_QUEUE_SIZE     20
+
+/* TX serialiser: the heartbeat task and the command dispatcher both
+ * transmit. The ESP-IDF driver makes single uart_write_bytes() calls
+ * atomic, but whole-packet atomicity across tasks is guaranteed here
+ * rather than hoped for. RX is single-consumer (task_uart_rx). */
+static SemaphoreHandle_t s_tx_lock;
 
 void uart_link_init(void)
 {
@@ -42,6 +50,8 @@ void uart_link_init(void)
                                   UART_PIN_NO_CHANGE,
                                   UART_PIN_NO_CHANGE));
 
+    s_tx_lock = xSemaphoreCreateMutex();
+
     ESP_LOGI(TAG, "UART1 initialised: %d baud, TX=GPIO%d, RX=GPIO%d",
              UART_BAUD_RATE, UART_TX_PIN, UART_RX_PIN);
 }
@@ -49,7 +59,13 @@ void uart_link_init(void)
 bool uart_link_send(const uint8_t *data, uint32_t len)
 {
     if (data == NULL || len == 0u) return false;
+    if (s_tx_lock != NULL) {
+        xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+    }
     int written = uart_write_bytes(UART_NUM_USED, (const char *)data, len);
+    if (s_tx_lock != NULL) {
+        xSemaphoreGive(s_tx_lock);
+    }
     return (written == (int)len);
 }
 

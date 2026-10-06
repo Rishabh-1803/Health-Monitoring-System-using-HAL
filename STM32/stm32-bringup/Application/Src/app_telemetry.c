@@ -8,17 +8,18 @@
  * pass) always sees a live loop.
  *
  * Per tick:
- *   1. ADC (ACS712)  : averaged conversion + EMA filter          (~fast)
- *   2. SW-420        : debounced edge count, 1 s sliding window   (~fast)
+ *   1. INA219 (I2C)  : shunt current, 8-sample rolling average   (~fast)
+ *   2. MPU6050 (I2C) : accel magnitude, high-passed to vibration (~fast)
  *   3. DS18B20       : non-blocking state machine (see below)     (~fast)
  *   4. UART RX       : drain ring buffer, decode, run commands    (~fast)
  *   5. Alarm engine  : hysteresis state machine per channel       (~fast)
  *   6. Outputs       : LED blink, buzzer timeout, relay latch     (~fast)
+ *   7. OLED          : one page flushed per tick (8 ticks = full)  (~fast)
  *
  * Then, when due:
  *   - MSG_TELEMETRY every sample_period_ms (default 200 ms, 50..1000)
  *   - MSG_HEARTBEAT every 1000 ms
- *   - console status line every 10 s
+ *   - console status line every 0.5 s (real-time)
  *
  * DS18B20 state machine (a 12-bit conversion takes up to 750 ms and the
  * old test just slept through it; the application cannot afford that):
@@ -30,11 +31,12 @@
  *            bad   -> fail streak++; 5 in a row = SENSOR_FAIL alarm
  *   READ --> IDLE
  *
- * Vibration honesty note: the SW-420 is a digital contact, so there is no
- * true acceleration to measure. "vibration_g" is an ESTIMATE: debounced
- * edges per second times 0.02 (calibrate VIB_EDGES_PER_G for your rig).
- * The dashboard labels it "est. g". The vibration threshold travels in the
- * same estimated-g units, so values and thresholds stay comparable.
+ * Vibration: the MPU6050 accelerometer gives a REAL acceleration magnitude
+ * (sqrt(ax^2+ay^2+az^2)). A slow baseline (init = 1 g for gravity) is tracked
+ * so the displayed vibration_g is the high-passed dynamic component in true
+ * g -- directly comparable to the threshold, no calibration factor needed.
+ * Current: the INA219 measures the shunt voltage over I2C; an 8-sample
+ * rolling average keeps the number real-time yet noise-stable.
  *
  * Watchdog: driven at register level (IWDG->KR/PRL/RLR) rather than
  * through HAL, because the CubeMX project never enabled the IWDG module
@@ -62,7 +64,11 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "stm32f4xx_hal.h"
+#include <stdio.h>
 #include <string.h>
+#include "oled.h"
+#include "ina219.h"
+#include "mpu6050.h"
 
 /* ================================================================== */
 /*  Tunables                                                          */
@@ -70,21 +76,21 @@
 
 #define APP_TICK_MS             10u     /* base loop period                */
 #define HB_PERIOD_MS            1000u   /* STM32 heartbeat to ESP32        */
-#define STATUS_PRINT_MS         10000u  /* console status line             */
+#define STATUS_PRINT_MS         500u    /* console status line (0.5 s)     */
 
 #define DS_READ_PERIOD_MS       2000u   /* temperature read interval       */
 #define DS_CONVERT_WAIT_MS      800u    /* >= 750 ms worst-case conversion */
 
-#define VIB_WINDOW_MS           1000u   /* sliding window for edges/sec    */
-#define VIB_EDGES_PER_G         50.0f   /* calibrate: edges/s per g        */
 
 #define ALARM_CONFIRM_MS        1500u   /* above threshold this long = on  */
 #define ALARM_CLEAR_MS          3000u   /* below clear level this long = off */
 #define COMM_FAIL_MS            5000u   /* no packet from ESP32            */
 #define DS_FAIL_STREAK          5u      /* consecutive bad reads = fail    */
 
-#define ADC_AVG_N               16u     /* per-tick ADC averaging          */
-#define EMA_CUR                 0.5f    /* current filter coefficient      */
+#define CUR_AVG_N               8u      /* current rolling-average depth   */
+#define VIB_BASELINE_ALPHA      0.02f   /* slow gravity/DC tracker (MPU6050)*/
+#define VIB_EMA_ALPHA           0.3f    /* vibration smoothing coefficient */
+#define OLED_REBUILD_MS         250u    /* framebuffer refresh interval    */
 #define EMA_TEMP                0.25f   /* temperature filter coefficient  */
 
 #define BUZZER_ON_ALARM_MS      3000u   /* buzzer duration on raise        */
@@ -117,7 +123,6 @@ typedef struct {
 /* Filters + measured values */
 static float    s_temp_c        = 0.0f;
 static float    s_current_a     = 0.0f;
-static uint32_t s_vib_edges_ps  = 0u;     /* debounced edges in last 1 s  */
 static float    s_vib_g_est     = 0.0f;
 static bool     s_temp_valid    = false;
 
@@ -128,12 +133,6 @@ static uint32_t   s_ds_next_read  = 0u;
 static uint32_t   s_ds_fail_streak = 0u;
 static uint8_t    s_ds_scratch[9];
 
-/* Vibration sliding window: VIB_WINDOW_MS / APP_TICK_MS slots */
-#define VIB_SLOTS   (VIB_WINDOW_MS / APP_TICK_MS)
-static uint8_t  s_vib_win[VIB_SLOTS];
-static uint32_t s_vib_win_idx = 0u;
-static bool     s_vib_last_level = false;
-static uint32_t s_vib_last_edge_tick = 0u;
 
 /* Alarm channels (index = threshold id: 0 temp, 1 current, 2 vibration) */
 static alarm_channel_t s_alarms[3] = {
@@ -166,6 +165,16 @@ static uint16_t s_cpu_load_10000  = 0u;   /* 0..10000 = 0..100.00 %      */
 
 /* Console cadence */
 static uint32_t s_next_status     = 0u;
+
+/* INA219 / MPU6050 / OLED app-mode state */
+static bool     s_ina219_ok     = false;
+static bool     s_mpu6050_ok    = false;
+static float    s_cur_buf[CUR_AVG_N];   /* rolling current samples */
+static uint32_t s_cur_idx       = 0u;
+static bool     s_cur_full      = false;
+static float    s_vib_baseline_g = 1.0f; /* slow gravity/DC tracker */
+static uint8_t  s_oled_page     = 0u;    /* round-robin page flush */
+static uint32_t s_next_oled_rebuild = 0u;
 
 /* ================================================================== */
 /*  Watchdog — register level, deliberately not HAL                   */
@@ -298,51 +307,74 @@ static void send_alarm_event(uint8_t bit, const char *name,
 }
 
 /* ================================================================== */
-/*  Sensor: ACS712 on PA1                                             */
+/*  Sensor: INA219 current on I2C (replaces ACS712 analog path)      */
 /* ================================================================== */
 
-static void sample_adc(void)
+/* Reads the shunt voltage over I2C every tick (100 Hz) and keeps an
+ * 8-sample rolling average -- the depth the operator asked for -- so the
+ * displayed current is real-time yet noise-stable. A failed I2C read
+ * leaves the last average in place and clears the sensor-ok bit so the
+ * dashboard can show the fault instead of a confident zero. */
+static void sample_current(void)
 {
-    uint32_t t0 = bsp_adc_timeouts();
-    uint16_t raw = bsp_adc_read_avg(ADC_AVG_N);
-    if (bsp_adc_timeouts() != t0) {
-        return;                     /* conversion timeout: skip this pass */
+    int32_t cur_ma = 0;
+    if (!ina219_read_current_ma(&cur_ma)) {
+        s_ina219_ok = false;
+        return;
     }
-    uint32_t mv = bsp_adc_raw_to_mv(raw);
-    int32_t delta_mv = (int32_t)mv - (int32_t)ACS712_ZERO_MV;
-    float amps = (float)delta_mv / (float)ACS712_MV_PER_AMP;
+    s_ina219_ok = true;
 
+    float amps = (float)cur_ma / 1000.0f;
     if (amps < 0.0f) {
-        amps = -amps;               /* rectify: load current, not sign    */
+        amps = -amps;               /* rectify: load current, not sign  */
     }
-    s_current_a += EMA_CUR * (amps - s_current_a);
+
+    s_cur_buf[s_cur_idx] = amps;
+    s_cur_idx = (s_cur_idx + 1u) % CUR_AVG_N;
+    if (s_cur_idx == 0u) {
+        s_cur_full = true;
+    }
+
+    uint32_t n = s_cur_full ? CUR_AVG_N : s_cur_idx;
+    if (n == 0u) {
+        s_current_a = amps;
+        return;
+    }
+    float sum = 0.0f;
+    for (uint32_t i = 0u; i < n; i++) {
+        sum += s_cur_buf[i];
+    }
+    s_current_a = sum / (float)n;   /* 8-sample moving average           */
 }
 
 /* ================================================================== */
-/*  Sensor: SW-420 on PB12                                            */
+/*  Sensor: MPU6050 acceleration on I2C (replaces SW-420 digital)    */
 /* ================================================================== */
 
+/* Vibration is now a REAL quantity: the deviation of the total
+ * acceleration magnitude from a slow baseline. The baseline ( initialised
+ * to 1 g = gravity) tracks the DC level with a small alpha so mounting
+ * orientation does not matter; vibration_g is the high-passed dynamic
+ * component, smoothed with a light EMA. This is directly comparable to the
+ * operator-set threshold in real g, unlike the old SW-420 edges/s estimate. */
 static void sample_vibration(void)
 {
-    bool level = bsp_vibration_asserted();
-    uint32_t now = (uint32_t)xTaskGetTickCount();
-    uint8_t edges_this_tick = 0u;
-
-    if (level != s_vib_last_level) {
-        if ((now - s_vib_last_edge_tick) > 20u) {   /* 20 ms debounce     */
-            edges_this_tick = 1u;
-            s_vib_last_edge_tick = now;
-        }
-        s_vib_last_level = level;
+    float mag_g = 0.0f;
+    if (!mpu6050_read_magnitude_g(&mag_g)) {
+        s_mpu6050_ok = false;
+        return;
     }
+    s_mpu6050_ok = true;
 
-    /* Sliding 1 s window of edge counts. */
-    s_vib_edges_ps -= s_vib_win[s_vib_win_idx];
-    s_vib_win[s_vib_win_idx] = edges_this_tick;
-    s_vib_edges_ps += edges_this_tick;
-    s_vib_win_idx = (s_vib_win_idx + 1u) % VIB_SLOTS;
+    /* Slow baseline so the high-pass follows gravity + DC drift only. */
+    s_vib_baseline_g += VIB_BASELINE_ALPHA * (mag_g - s_vib_baseline_g);
 
-    s_vib_g_est = (float)s_vib_edges_ps / VIB_EDGES_PER_G;
+    /* Dynamic component: |instant - baseline|. */
+    float dev = mag_g - s_vib_baseline_g;
+    if (dev < 0.0f) {
+        dev = -dev;
+    }
+    s_vib_g_est += VIB_EMA_ALPHA * (dev - s_vib_g_est);
 }
 
 /* ================================================================== */
@@ -562,8 +594,10 @@ static void send_telemetry(uint32_t now_ms)
     p.current_a            = s_current_a;
     p.vibration_g          = s_vib_g_est;
     p.alarm_bits           = s_alarm_bits;
-    p.sensor_status        = s_temp_valid && !s_sensor_fail
-                             ? SENSOR_BIT_DS18B20_OK : 0u;
+    p.sensor_status        = (s_temp_valid && !s_sensor_fail
+                                ? SENSOR_BIT_DS18B20_OK : 0u)
+                             | (s_ina219_ok ? SENSOR_BIT_INA219_OK : 0u)
+                             | (s_mpu6050_ok ? SENSOR_BIT_MPU6050_OK : 0u);
     p.cpu_load_pct         = s_cpu_load_10000;
     p.free_heap_bytes_div16 = (uint16_t)(xPortGetFreeHeapSize() / 16u);
     p.uptime_seconds       = (uint16_t)(now_ms / 1000u);
@@ -580,8 +614,10 @@ static void send_status_response(void)
     r.current_a             = s_current_a;
     r.vibration_g           = s_vib_g_est;
     r.alarm_bits            = s_alarm_bits;
-    r.sensor_status         = s_temp_valid && !s_sensor_fail
-                              ? SENSOR_BIT_DS18B20_OK : 0u;
+    r.sensor_status         = (s_temp_valid && !s_sensor_fail
+                                 ? SENSOR_BIT_DS18B20_OK : 0u)
+                              | (s_ina219_ok ? SENSOR_BIT_INA219_OK : 0u)
+                              | (s_mpu6050_ok ? SENSOR_BIT_MPU6050_OK : 0u);
     r.cpu_load_pct          = (uint8_t)(s_cpu_load_10000 / 100u);
     r.task_states           = 0u;   /* single-task app: always healthy */
     r.free_heap_bytes_div16 = (uint16_t)(xPortGetFreeHeapSize() / 16u);
@@ -803,6 +839,65 @@ static void print_status_line(void)
 }
 
 /* ================================================================== */
+/*  OLED live status page                                             */
+/* ================================================================== */
+
+/* Renders the current telemetry into the OLED framebuffer. The buffer
+ * is rebuilt every OLED_REBUILD_MS; one page is then flushed per tick so
+ * the whole 128x64 screen refreshes in eight ticks (~80 ms) without ever
+ * blocking the loop long enough to overflow the UART RX ring. Numbers use
+ * integer-only snprintf specs so the build needs no float-printf support. */
+static void oled_render_status(void)
+{
+    char line[24];
+    int t_int  = (int)s_temp_c;
+    int t_frac = (int)((s_temp_c - (float)t_int) * 10.0f);
+    if (t_frac < 0) { t_frac = -t_frac; }
+    int i_int  = (int)s_current_a;
+    int i_frac = (int)((s_current_a - (float)i_int) * 100.0f);
+    if (i_frac < 0) { i_frac = -i_frac; }
+    int v_int  = (int)s_vib_g_est;
+    int v_frac = (int)((s_vib_g_est - (float)v_int) * 100.0f);
+    if (v_frac < 0) { v_frac = -v_frac; }
+    uint32_t up = HAL_GetTick() / 1000u;
+    uint32_t hh = up / 3600u;
+    uint32_t mm = (up / 60u) % 60u;
+    uint32_t ss = up % 60u;
+
+    oled_clear();
+    oled_text(0, 0, "HEALTH MONITOR");
+
+    snprintf(line, sizeof(line), "T %d.%d C", t_int, t_frac);
+    oled_text(0, 10, line);
+    snprintf(line, sizeof(line), "I %d.%02d A", i_int, i_frac);
+    oled_text(72, 10, line);
+
+    snprintf(line, sizeof(line), "V %d.%02d g", v_int, v_frac);
+    oled_text(0, 20, line);
+
+    if (s_alarm_bits == 0u) {
+        oled_text(0, 30, "ALM OK");
+    } else {
+        snprintf(line, sizeof(line), "ALM 0x%02X", s_alarm_bits);
+        oled_text(0, 30, line);
+    }
+    snprintf(line, sizeof(line), "S:%c%c%c",
+             (s_temp_valid && !s_sensor_fail) ? (char)0x54 : (char)0x2D,
+             s_ina219_ok  ? (char)0x49 : (char)0x2D,
+             s_mpu6050_ok ? (char)0x56 : (char)0x2D);
+    oled_text(96, 30, line);
+
+    snprintf(line, sizeof(line), "UP %02u:%02u:%02u",
+             (unsigned)hh, (unsigned)mm, (unsigned)ss);
+    oled_text(0, 40, line);
+
+    snprintf(line, sizeof(line), "CPU %u%%",
+             (unsigned)(s_cpu_load_10000 / 100u));
+    oled_text(0, 50, line);
+    oled_text(80, 50, s_comm_fail ? "NO LINK" : "LINK OK");
+}
+
+/* ================================================================== */
 /*  Application main loop                                             */
 /* ================================================================== */
 
@@ -818,13 +913,30 @@ void app_telemetry_run(void)
     console_flush_rx();
     wdt_start();
 
+    /* Bring up the I2C sensors and the OLED status display. Each is
+     * optional: a missing device clears its ok-bit and the app keeps
+     * running on whatever it can read, so a loose wire degrades the
+     * dashboard instead of hanging the loop. */
+    (void)ina219_init();
+    (void)mpu6050_init();
+    if (oled_init()) {
+        oled_clear();
+        oled_text(0, 0, "HEALTH MONITOR");
+        oled_text(0, 20, "BOOTING...");
+        (void)oled_flush_all();
+    }
+
     /* State reset (the menu may have run tests in between). */
-    s_vib_edges_ps = 0u;
-    memset(s_vib_win, 0, sizeof(s_vib_win));
+    memset(s_cur_buf, 0, sizeof(s_cur_buf));
+    s_cur_idx = 0u;
+    s_cur_full = false;
+    s_vib_baseline_g = 1.0f;
+    s_vib_g_est = 0.0f;
     s_ds_state = DS_IDLE;
     s_ds_next_read = HAL_GetTick();
     s_last_rx_tick = HAL_GetTick();
     s_next_status = HAL_GetTick() + STATUS_PRINT_MS;
+    s_next_oled_rebuild = HAL_GetTick() + OLED_REBUILD_MS;
     s_window_start_cy = bsp_cycles();
     s_window_ms = 0u;
     s_work_cycles_acc = 0u;
@@ -846,7 +958,7 @@ void app_telemetry_run(void)
             banner_sent = true;
         }
 
-        sample_adc();
+        sample_current();
         sample_vibration();
         ds_tick(now);
         rx_drain(now);
@@ -881,6 +993,17 @@ void app_telemetry_run(void)
             s_next_status = now + STATUS_PRINT_MS;
             print_status_line();
         }
+
+        /* OLED: rebuild the framebuffer on a rolling cadence, then
+         * flush ONE page per tick (round-robin). At 250 kHz I2C a
+         * single page is ~4.6 ms, well inside the 5.6 ms the 256-byte
+         * UART RX ring takes to fill at 460800 baud. */
+        if ((int32_t)(now - s_next_oled_rebuild) >= 0) {
+            s_next_oled_rebuild = now + OLED_REBUILD_MS;
+            oled_render_status();
+        }
+        (void)oled_flush_page(s_oled_page);
+        s_oled_page = (uint8_t)((s_oled_page + 1u) & 7u);
 
         /* CPU load bookkeeping over the last telemetry window. */
         s_work_cycles_acc += bsp_elapsed_us(work_start) * 96u; /* cycles  */

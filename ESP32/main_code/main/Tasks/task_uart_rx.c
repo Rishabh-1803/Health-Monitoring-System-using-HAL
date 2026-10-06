@@ -18,6 +18,7 @@
  */
 
 #include "task_uart_rx.h"
+#include "project_config.h"
 #include "uart_link.h"
 #include "packet.h"
 #include "protocol_types.h"
@@ -40,6 +41,30 @@ static const char *TAG = "UART_RX";
 /* Initialised to boot tick so the TX task doesn't immediately fire comm-fail */
 volatile uint32_t g_last_rx_tick = 0;
 
+#if HMS_UART_ECHO_PROBE
+/* Optional bring-up helper: the STM32 test menu (option 7, echo) sends the raw
+ * text "STM32-BRINGUP-PING\r\n" and passes if anything comes back. The real
+ * protocol is framed, so a plain string would otherwise be dropped silently.
+ * When the exact probe string is seen, send it straight back. It cannot clash
+ * with real frames because those never contain this ASCII sequence. */
+static const char ECHO_PROBE[] = "STM32-BRINGUP-PING\r\n";
+static uint8_t    s_echo_idx;
+
+static void echo_probe_feed(uint8_t b)
+{
+    const uint8_t n = (uint8_t)(sizeof(ECHO_PROBE) - 1u);
+    if (b == (uint8_t)ECHO_PROBE[s_echo_idx]) {
+        if (++s_echo_idx == n) {
+            s_echo_idx = 0u;
+            (void)uart_link_send((const uint8_t *)ECHO_PROBE, n);
+            ESP_LOGI(TAG, "bring-up echo probe answered");
+        }
+    } else {
+        s_echo_idx = (b == (uint8_t)ECHO_PROBE[0]) ? 1u : 0u;
+    }
+}
+#endif /* HMS_UART_ECHO_PROBE */
+
 /* Counters, read by task_dashboard for the status JSON. */
 static uint32_t s_rx_packets, s_crc_fails, s_alarms, s_unknown;
 
@@ -57,13 +82,16 @@ void task_uart_rx(void *arg)
     packet_decoder_init(&dec);
 
     while (1) {
-        esp_task_wdt_reset(NULL);
+        esp_task_wdt_reset();
 
         uint8_t byte;
         if (!uart_link_get_byte(&byte, RX_BYTE_TIMEOUT)) {
             continue;   /* timeout — loop back, nothing to decode */
         }
 
+#if HMS_UART_ECHO_PROBE
+        echo_probe_feed(byte);
+#endif
         packet_result_t r = packet_decode_byte(&dec, byte);
 
         if (r == PACKET_OK) {

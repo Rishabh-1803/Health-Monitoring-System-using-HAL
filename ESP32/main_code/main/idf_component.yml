@@ -1,5 +1,0 @@
-dependencies:
-  espressif/esp_littlefs:
-    version: "^1.9"
-    rules:
-      - if: "target in [esp32s3]"

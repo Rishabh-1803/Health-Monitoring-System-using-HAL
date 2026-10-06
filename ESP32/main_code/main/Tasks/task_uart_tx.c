@@ -44,7 +44,7 @@ void task_uart_tx(void *arg)
     bool comm_fail = false;
 
     while (1) {
-        esp_task_wdt_reset(NULL);
+        esp_task_wdt_reset();
 
         /* Build and send a heartbeat packet */
         uint8_t pkt[PACKET_MAX_SIZE];

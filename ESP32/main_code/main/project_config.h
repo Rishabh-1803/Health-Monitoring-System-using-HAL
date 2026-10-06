@@ -18,12 +18,17 @@
 #define HEARTBEAT_PERIOD_MS     1000
 #define COMM_FAIL_TIMEOUT_MS   5000
 
+/* Answer the STM32 bring-up "echo" probe (menu option 7). 0 = disabled. */
+#ifndef HMS_UART_ECHO_PROBE
+#define HMS_UART_ECHO_PROBE 1
+#endif
+
 /* ------------------------------------------------------------------ */
 /*  Optional flash storage (LittleFS). Set to 0 when the esp_littlefs
  *  component is unavailable — the system degrades to RAM + NVS.       */
 /* ------------------------------------------------------------------ */
 #ifndef HMS_USE_LITTLEFS
-#define HMS_USE_LITTLEFS   1
+#define HMS_USE_LITTLEFS   0
 #endif
 
 #endif /* PROJECT_CONFIG_H */

@@ -42,12 +42,12 @@ static const char *TAG = "HTTP_SRV";
 static httpd_handle_t s_server;
 
 /* Embedded web assets (see main/CMakeLists.txt EMBEDFILES). */
-extern const uint8_t index_html_start[] asm("_binary_Web_index_html_start");
-extern const uint8_t index_html_end[]   asm("_binary_Web_index_html_end");
-extern const uint8_t style_css_start[]  asm("_binary_Web_style_css_start");
-extern const uint8_t style_css_end[]    asm("_binary_Web_style_css_end");
-extern const uint8_t app_js_start[]     asm("_binary_Web_app_js_start");
-extern const uint8_t app_js_end[]       asm("_binary_Web_app_js_end");
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
+extern const uint8_t style_css_start[]  asm("_binary_style_css_start");
+extern const uint8_t style_css_end[]    asm("_binary_style_css_end");
+extern const uint8_t app_js_start[]     asm("_binary_app_js_start");
+extern const uint8_t app_js_end[]       asm("_binary_app_js_end");
 
 /* ================================================================== */
 /*  Small helpers                                                     */
@@ -397,7 +397,7 @@ esp_err_t http_server_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 24;   /* 17 routes + /ws (default 8 / old 16 silently dropped some) */
     cfg.server_port = 80;
 
     esp_err_t err = httpd_start(&s_server, &cfg);
@@ -427,7 +427,10 @@ esp_err_t http_server_start(void)
         { .uri = "/favicon.ico",    .method = HTTP_GET,  .handler = h_captive },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-        (void)httpd_register_uri_handler(s_server, &routes[i]);
+        esp_err_t rerr = httpd_register_uri_handler(s_server, &routes[i]);
+        if (rerr != ESP_OK) {
+            ESP_LOGE(TAG, "register %s failed: 0x%x", routes[i].uri, rerr);
+        }
     }
 
     static const httpd_uri_t ws_route = {
@@ -435,7 +438,10 @@ esp_err_t http_server_start(void)
         .handler = websocket_server_ws_handler,
         .is_websocket = true,
     };
-    (void)httpd_register_uri_handler(s_server, &ws_route);
+    esp_err_t werr = httpd_register_uri_handler(s_server, &ws_route);
+    if (werr != ESP_OK) {
+        ESP_LOGE(TAG, "register /ws failed: 0x%x", werr);
+    }
 
     ESP_LOGI(TAG, "HTTP+WS server on port 80 (%d URI handlers)",
              (int)(sizeof(routes) / sizeof(routes[0]) + 1));

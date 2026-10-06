@@ -71,7 +71,7 @@ static void task_watchdog(void *arg)
     uint32_t last_heap_warn = 0u;
 
     while (1) {
-        esp_task_wdt_reset(NULL);
+        esp_task_wdt_reset();
 
         uint32_t now = dashboard_data_uptime_ms();
         uint32_t age = dashboard_data_telemetry_age_ms();

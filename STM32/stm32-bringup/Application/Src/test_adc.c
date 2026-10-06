@@ -112,9 +112,18 @@ test_result_t test_adc_run(void)
     uint16_t swing = (uint16_t)(max_v - min_v);
     (void)console_printf("  Total swing during the window: %u counts (%lu mV)\r\n",
                          swing, (unsigned long)bsp_adc_raw_to_mv(swing));
+    /* Idle-level window: a connected ACS712 with no load must sit near its zero point. */
 
+	#define ACS_IDLE_TOL_MV  250u
+	if (mv < (ACS712_ZERO_MV - ACS_IDLE_TOL_MV) ||
+		mv > (ACS712_ZERO_MV + ACS_IDLE_TOL_MV)) {
+		(void)console_println("  Idle level is outside the expected window: sensor missing,");
+		(void)console_println("  wrong supply, or a bad divider.");
+		return TEST_FAIL;
+	}
     /* Verdicts. A rail-pinned reading is the one unambiguous failure. */
-    if (raw == 0u && swing == 0u) {
+
+    if (raw < 20u) {
         (void)console_println("  Dead at zero and never moved: pin grounded, floating, or");
         (void)console_println("  the conversion is not completing.");
         return TEST_FAIL;

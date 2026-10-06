@@ -21,7 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "DIAG";
+static const char *TAG __attribute__((unused)) = "DIAG";
 
 #define DIAG_STACK   4096
 #define DIAG_PRIO     2

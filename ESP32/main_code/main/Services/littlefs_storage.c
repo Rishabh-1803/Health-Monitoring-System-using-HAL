@@ -31,10 +31,8 @@ void littlefs_storage_mount(void)
 {
     esp_vfs_littlefs_conf_t conf = {
         .partition_label = PARTITION_LABEL,
-        .mount_point = "/lfs",
-        .max_files = 8,
+        .base_path = "/lfs",
         .format_if_mount_failed = true,
-        .allocation_unit = 4096,
     };
     esp_err_t err = esp_vfs_littlefs_register(&conf);
     if (err != ESP_OK) {

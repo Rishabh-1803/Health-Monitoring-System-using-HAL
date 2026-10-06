@@ -84,7 +84,7 @@ static void task_dashboard(void *arg)
 
     char json[2400];
     while (1) {
-        esp_task_wdt_reset(NULL);
+        esp_task_wdt_reset();
 
         dashboard_data_sample_tick();
         push_link_stats();

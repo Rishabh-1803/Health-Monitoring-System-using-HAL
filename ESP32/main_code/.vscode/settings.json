@@ -1,5 +1,17 @@
 {
     "idf.currentSetup": "C:\\esp\\v6.0.2\\esp-idf",
     "idf.flashType": "UART",
-    "idf.port": "COM7"
+    "idf.port": "COM7",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "idf.customExtraVars": {
+        "IDF_TARGET": "esp32s3"
+    },
+    "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+    "clangd.arguments": [
+      "--background-index",
+      "--query-driver=**",
+      "--compile-commands-dir=c:\\Users\\admin\\Downloads\\New folder (4)\\New folder\\Health-Monitoring-System-using-HAL\\ESP32\\main_code\\build"
+    ]
 }

@@ -34,7 +34,7 @@ idf_component_register(
         "Tasks"
         "Protocol"
         "Services"
-    EMBEDFILES
+    EMBED_FILES
         "Web/index.html"
         "Web/style.css"
         "Web/app.js"

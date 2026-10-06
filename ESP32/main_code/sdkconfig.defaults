@@ -24,3 +24,22 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
 CONFIG_ESP_TASK_WDT_PANIC=y
 # CPU load measurement for the dashboard (idle-task accounting)
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
+# ===== Build-fix additions =====
+# Target chip (the previously committed sdkconfig was generated for plain "esp32")
+CONFIG_IDF_TARGET="esp32s3"
+
+# Board is ESP32-S3-DevKitC-1 N16R8: 16 MB flash. The custom table below needs > 2 MB.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# WebSocket support in esp_http_server (dashboard live push uses httpd_ws_*)
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# Task list shows the core id (system_stats.c)
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
+# HTTP server needs room for the dashboard routes + captive-portal handlers
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512

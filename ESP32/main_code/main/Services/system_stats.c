@@ -12,7 +12,7 @@
 
 #include <string.h>
 
-static const char *TAG = "SYS_STATS";
+static const char *TAG __attribute__((unused)) = "SYS_STATS";
 
 #define STATS_MAX_TASKS  24
 
@@ -112,7 +112,12 @@ void system_stats_dump_tasks_console(void)
         }
         printf("%-16s %-10s %-4d %-5u %u\n",
                tasks[i].pcTaskName, st,
+               
+#if defined(CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID)
                (int)tasks[i].xCoreID,
+#else
+               -1,
+#endif
                (unsigned)tasks[i].uxCurrentPriority,
                (unsigned)tasks[i].usStackHighWaterMark);
     }

@@ -90,13 +90,43 @@
 #define I2C_SCL_PIN               GPIO_PIN_6
 #define I2C_SDA_PORT              GPIOB
 #define I2C_SDA_PIN               GPIO_PIN_7
-#define I2C_HALF_BIT_US           5u       /* ~100 kHz; raise to slow the bus */
+/* 2 us half-bit ~= 250 kHz. SSD1306/INA219/MPU6050 all support 400 kHz,
+ * so 250 kHz is within spec and lets the 10 ms telemetry tick flush one
+ * OLED page without overflowing the 256-byte UART RX ring (which fills
+ * in ~5.6 ms at 460800 baud). Raise to 5 for ~100 kHz.                 */
+#define I2C_HALF_BIT_US           2u
 #define I2C_TIMEOUT_US            2000u    /* clock-stretch / stuck-line guard */
 
 /* SSD1306 OLED. 0x3C is by far the most common; some modules are 0x3D. */
 #define OLED_I2C_ADDR_7BIT        0x3Cu
 #define OLED_WIDTH                128
 #define OLED_HEIGHT               64
+
+/* ------------------------------------------------------------------ *
+ *  INA219 bidirectional current/voltage/power sensor (I2C).
+ *  Shares the PB6/PB7 bus with the OLED and the MPU6050.
+ *
+ *  Address 0x40 when A0=A1=GND (strap on most breakouts); A0/A1
+ *  jumpers move it across 0x40..0x4F. If current reads 0 forever,
+ *  run the I2C scan (menu 2) and set the address it finds.
+ *
+ *  Shunt: nearly all INA219 breakouts ship a 0.1 ohm (R100) sense
+ *  resistor -> ~10 mA resolution at PGA /1 (40 mV range). A 0.01
+ *  ohm board (R010) is for higher current; the math still works
+ *  because current = V_shunt / R_shunt.
+ * ------------------------------------------------------------------ */
+#define INA219_I2C_ADDR_7BIT      0x40u
+#define INA219_SHUNT_OHM_X10000   1000u   /* 0.1 ohm = 1000 * 0.0001 ohm   */
+
+/* ------------------------------------------------------------------ *
+ *  MPU6050 6-axis accel/gyro (I2C) used as the vibration source.
+ *  Address 0x68 when AD0=GND, 0x69 when AD0=VCC. Accelerometer set
+ *  to +-2 g full scale -> 16384 LSB per g (0.061 mg/LSB). Vibration
+ *  is the high-passed total acceleration magnitude in g.
+ * ------------------------------------------------------------------ */
+#define MPU6050_I2C_ADDR_7BIT     0x68u
+#define MPU6050_ACCEL_RANGE       0u      /* 0=+-2g 1=+-4g 2=+-8g 3=+-16g */
+
 
 /* ------------------------------------------------------------------ *
  *  DS18B20 1-Wire temperature sensor -- PB5. Needs a 4.7k pull-up to
@@ -133,14 +163,16 @@
 #define VIBRATION_ACTIVE_LOW      1
 
 /* ------------------------------------------------------------------ *
- *  ESP32 link -- USART2 on PA2 (TX) / PA3 (RX), already initialised by
- *  CubeMX at 115200 8N1. main_code eventually wants 460800, but
- *  proving the wiring at 115200 first is the sane order.
+ *  ESP32 link -- USART2 on PA2 (TX) / PA3 (RX), initialised by CubeMX
+ *  at 460800 8N1 (Core/Src/usart.c). The ESP32 side matches at 460800
+ *  (ESP32/main_code/main/Drivers/uart_link.c). Both sides agree, so the
+ *  link works; the menu probe test (option 7) deliberately drops to
+ *  115200 to prove the wiring before trusting the higher rate.
  *
  *  Cross the wires: STM32 PA2 -> ESP32 RX, STM32 PA3 -> ESP32 TX, and
  *  tie the grounds together. Both sides are 3V3, so no level shifter.
  * ------------------------------------------------------------------ */
-#define ESP32_LINK_BAUD           115200u
+#define ESP32_LINK_BAUD           460800u  /* matches usart.c + ESP32 */
 #define ESP32_LINK_PROBE_TIMEOUT_MS 1500u
 
 #endif /* BRINGUP_CONFIG_H */

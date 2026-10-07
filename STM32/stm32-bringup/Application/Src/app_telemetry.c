@@ -100,6 +100,13 @@
 #define VIB_EMA_ALPHA           0.15f   /* smoothing of the vibration power*/
 #define SENSOR_OK_FAIL_TICKS    5u      /* bad reads before ok-bit clears  */
 #define SENSOR_ZERO_FAIL_TICKS  25u     /* bad reads before value -> 0     */
+/* Current channel only: removing the load can glitch the INA219 / I2C bus
+ * for a moment. Show 0 mA quickly (no load = no current) but only call it
+ * a FAULT after 1.5 s of continuous failure, and retry the sensor at
+ * 5 Hz instead of waiting for the 1 Hz service tick. */
+#define CUR_ZERO_FAIL_TICKS     30u     /* 0.3 s @ 100 Hz                  */
+#define CUR_OK_FAIL_TICKS      150u     /* 1.5 s                           */
+#define CUR_RETRY_EVERY_TICKS   20u     /* 5 Hz re-detect while failing    */
 #define SENSOR_SERVICE_MS       1000u   /* I2C sensor supervision period   */
 #define DIAG_PRINT_MS           2000u   /* I2C sensor diagnostics line     */
 #define OLED_REBUILD_MS         250u    /* framebuffer refresh interval    */
@@ -339,16 +346,18 @@ static void sample_current(void)
     float amps = 0.0f;
     if (!ina219_read_current_a(&amps)) {
         s_cur_fail++;
-        if (s_cur_fail >= SENSOR_OK_FAIL_TICKS) {
-            s_ina219_ok = false;
-        }
-        if (s_cur_fail == SENSOR_ZERO_FAIL_TICKS) {
-            /* Sensor is gone for good: a frozen last value would sit on the
-             * dashboard (and could hold an alarm) forever. Show 0 + fault. */
+        if (s_cur_fail == CUR_ZERO_FAIL_TICKS) {
+            /* Show 0 instead of a frozen last value (load is gone). */
             memset(s_cur_buf, 0, sizeof(s_cur_buf));
             s_cur_idx  = 0u;
             s_cur_full = false;
             s_current_a = 0.0f;
+        }
+        if (s_cur_fail >= CUR_OK_FAIL_TICKS) {
+            s_ina219_ok = false;
+        }
+        if (s_cur_fail >= 5u && (s_cur_fail % CUR_RETRY_EVERY_TICKS) == 0u) {
+            ina219_service();       /* re-probe / re-program quickly    */
         }
         return;
     }
@@ -706,8 +715,8 @@ static void apply_threshold(uint8_t id, float value)
             s_alarms[1].clear_level = value * 0.9f;
             if (value * 1000.0f > (float)INA219_FULL_SCALE_MA) {
                 /* The alarm could never fire: the sensor clips first. */
-                (void)console_printf("[WARN] current threshold %d/100 A is above the INA219 range (%u mA)\r\n",
-                                     (int)(value * 100.0f),
+                (void)console_printf("[WARN] current threshold %d mA is above the INA219 range (%u mA)\r\n",
+                                     (int)(value * 1000.0f),
                                      (unsigned)INA219_FULL_SCALE_MA);
                 send_debug(1u, "current threshold above INA219 range");
             }
@@ -892,9 +901,9 @@ static void rx_drain(uint32_t now_ms)
 static void print_status_line(void)
 {
     (void)console_printf(
-        "T %d/10 C   I %d/100 A   V %d/100 g   ALM 0x%02X   CPU %u/100 %%   %s\r\n",
+        "T %d/10 C   I %d mA   V %d/100 g   ALM 0x%02X   CPU %u/100 %%   %s\r\n",
         (int)(s_temp_c * 10.0f),
-        (int)(s_current_a * 100.0f),
+        (int)(s_current_a * 1000.0f),
         (int)(s_vib_g_est * 100.0f),
         (unsigned)s_alarm_bits,
         (unsigned)(s_cpu_load_10000 / 100u),
@@ -965,7 +974,7 @@ static void oled_render_status(void)
 
     snprintf(line, sizeof(line), "T %d.%d C", t_int, t_frac);
     oled_text(0, 10, line);
-    snprintf(line, sizeof(line), "I %d.%02d A", i_int, i_frac);
+    snprintf(line, sizeof(line), "I %d mA", (int)(s_current_a * 1000.0f));
     oled_text(72, 10, line);
 
     snprintf(line, sizeof(line), "V %d.%02d g", v_int, v_frac);

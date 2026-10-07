@@ -494,3 +494,27 @@ size_t dashboard_data_build_status_json(char *buf, size_t cap)
 
     return jsonw_len(&w);
 }
+
+size_t dashboard_data_build_live_json(char *buf, size_t cap)
+{
+    jsonw_t w;
+    jsonw_init(&w, buf, cap);
+    lock();
+    uint32_t t = now_ms();
+    uint32_t age = s_ever_linked ? (t - s_last_tel_ms) : 0xFFFFFFFFu;
+    float temp = s_temp_c, cur = s_current_a, vib = s_vib_g;
+    uint8_t alm = s_alarm_bits, sst = s_sensor_status;
+    bool link = !s_comm_fail;
+    unlock();
+
+    jsonw_raw(&w, "{\"type\":\"live\",\"ts\":");  jsonw_int(&w, (long long)t);
+    jsonw_raw(&w, ",\"link\":");  jsonw_bool(&w, link);
+    jsonw_raw(&w, ",\"age\":");   jsonw_int(&w, (long long)age);
+    jsonw_raw(&w, ",\"temp\":");  jsonw_num(&w, temp);
+    jsonw_raw(&w, ",\"cur\":");   jsonw_numf(&w, cur, 3);
+    jsonw_raw(&w, ",\"vib\":");   jsonw_numf(&w, vib, 3);
+    jsonw_raw(&w, ",\"alm\":");   jsonw_int(&w, alm);
+    jsonw_raw(&w, ",\"sstat\":"); jsonw_int(&w, sst);
+    jsonw_raw(&w, "}");
+    return jsonw_len(&w);
+}

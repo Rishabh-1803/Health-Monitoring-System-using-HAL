@@ -31,6 +31,17 @@
 
 #include <string.h>
 
+/* mDNS comes from the managed component espressif/mdns (main/idf_component.yml).
+ * If it is not present the build still works, just without project.local. */
+#if defined(__has_include) && __has_include("mdns.h")
+#include "mdns.h"
+#define HMS_HAVE_MDNS 1
+#else
+#define HMS_HAVE_MDNS 0
+#endif
+
+#define HMS_HOSTNAME  "project"      /* -> http://project.local/ */
+
 static const char *TAG = "WIFI_MGR";
 
 #define NVS_NAMESPACE   "hms_wifi"
@@ -433,7 +444,7 @@ static void start_station(const char *ssid, const char *pass)
 
     s_sta_netif = esp_netif_create_default_wifi_sta();
     if (s_sta_netif != NULL) {
-        (void)esp_netif_set_hostname(s_sta_netif, "health-monitor");
+        (void)esp_netif_set_hostname(s_sta_netif, HMS_HOSTNAME);
     }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -511,6 +522,22 @@ static void start_provisioning(void)
     ESP_LOGI(TAG, "");
 }
 
+static void start_mdns(void)
+{
+#if HMS_HAVE_MDNS
+    if (mdns_init() != ESP_OK) {
+        ESP_LOGW(TAG, "mdns_init failed — project.local unavailable");
+        return;
+    }
+    (void)mdns_hostname_set(HMS_HOSTNAME);
+    (void)mdns_instance_name_set("Equipment Health Monitor");
+    (void)mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    ESP_LOGI(TAG, "mDNS: http://%s.local/", HMS_HOSTNAME);
+#else
+    ESP_LOGW(TAG, "mdns component missing — project.local disabled");
+#endif
+}
+
 void wifi_manager_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
@@ -527,6 +554,7 @@ void wifi_manager_init(void)
         ESP_LOGW(TAG, "no stored credentials — provisioning AP");
         start_provisioning();
     }
+    start_mdns();      /* same name in STA and setup-AP mode, any SSID */
 }
 
 void wifi_manager_poll_rssi(void)

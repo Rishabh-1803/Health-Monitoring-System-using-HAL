@@ -43,6 +43,8 @@
 #include "task_logger.h"
 #include "logger.h"
 #include "littlefs_storage.h"
+#include "thingspeak.h"
+#include "task_thingspeak.h"
 
 static const char *TAG = "APP_MAIN";
 
@@ -91,6 +93,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(nvs);
 
+    thingspeak_init();
     wifi_manager_init();
 
     /* 8. Optional flash storage + persisted settings. The mirror seeds
@@ -120,6 +123,7 @@ void app_main(void)
     task_watchdog_start();
     task_diagnostics_start();
     task_logger_start();
+    task_thingspeak_start();
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "All services running. Telemetry + dashboard active.");

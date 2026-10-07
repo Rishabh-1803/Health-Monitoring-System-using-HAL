@@ -54,7 +54,7 @@
     </div>
     <div class="card kpi" id="kpi-cur">
       <div class="kpi-label">Current <span class="muted">(INA219)</span></div>
-      <div class="kpi-value"><span id="v-cur">--</span><span class="unit">A</span></div>
+      <div class="kpi-value"><span id="v-cur">--</span><span class="unit">mA</span></div>
       <div class="kpi-sub"><span id="kpi-cur-sub">thr --</span> <span class="sens" id="sens-ina">--</span></div>
     </div>
     <div class="card kpi" id="kpi-vib">
@@ -91,16 +91,13 @@
     </div>
     <div class="chart-grid">
       <div class="chart-cell">
-        <div class="chart-title">Temperature <span class="u">°C</span></div>
-        <canvas id="chart-temp" width="560" height="170"></canvas>
+        <canvas id="chart-temp" width="560" height="230"></canvas>
       </div>
       <div class="chart-cell">
-        <div class="chart-title">Current <span class="u">A</span></div>
-        <canvas id="chart-cur" width="560" height="170"></canvas>
+        <canvas id="chart-cur" width="560" height="230"></canvas>
       </div>
       <div class="chart-cell">
-        <div class="chart-title">Vibration <span class="u">g (est.)</span></div>
-        <canvas id="chart-vib" width="560" height="170"></canvas>
+        <canvas id="chart-vib" width="560" height="230"></canvas>
       </div>
     </div>
   </section>
@@ -112,7 +109,7 @@
       <form id="thr-form" class="ctl-block">
         <h3>Thresholds</h3>
         <label>Temp <input id="thr-temp" type="number" step="0.5" min="0" max="125"> °C</label>
-        <label>Current <input id="thr-cur" type="number" step="0.1" min="0" max="30"> A</label>
+        <label>Current <input id="thr-cur" type="number" step="1" min="0" max="30000"> mA</label>
         <label>Vibration <input id="thr-vib" type="number" step="0.05" min="0" max="10"> g</label>
         <button type="submit" class="primary">Apply</button>
         <span id="thr-msg" class="msg"></span>
@@ -126,11 +123,8 @@
       </form>
 
       <div class="ctl-block">
-        <h3>Outputs</h3>
+        <h3>STM32</h3>
         <div class="btn-grid">
-          <button id="btn-led-g">LED green</button>
-          <button id="btn-led-r">Relay (red)</button>
-          <button id="btn-alarm-reset">Reset alarms</button>
           <button id="btn-reboot-stm32" class="danger">Reboot STM32</button>
         </div>
         <span id="ctl-msg" class="msg"></span>

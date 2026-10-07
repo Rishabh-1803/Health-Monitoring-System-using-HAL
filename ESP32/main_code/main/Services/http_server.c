@@ -26,6 +26,7 @@
 #include "littlefs_storage.h"
 #include "websocket_server.h"
 #include "json_util.h"
+#include "thingspeak.h"
 #include "project_config.h"
 
 #include "esp_log.h"
@@ -384,6 +385,18 @@ static esp_err_t h_api_wifi_state(httpd_req_t *req)
 }
 
 /* ================================================================== */
+/*  REST: ThingSpeak                                                  */
+/* ================================================================== */
+
+static esp_err_t h_api_ts_get(httpd_req_t *req)
+{
+    char buf[256];
+    thingspeak_status_json(buf, sizeof(buf));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+}
+
+/* ================================================================== */
 /*  Server assembly                                                   */
 /* ================================================================== */
 
@@ -400,7 +413,7 @@ esp_err_t http_server_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 10240;
-    cfg.max_uri_handlers = 24;   /* 17 routes + /ws (default 8 / old 16 silently dropped some) */
+    cfg.max_uri_handlers = 28;   /* 17 routes + /ws (default 8 / old 16 silently dropped some) */
     cfg.server_port = 80;
     /* A browser (plus phone captive-portal probes) keeps several keep-alive
      * sockets open. With the default of 7 sockets and no purging, stale ones
@@ -413,8 +426,8 @@ esp_err_t http_server_start(void)
      * used" and the page dropped every few seconds. */
     cfg.max_open_sockets = 13;
     cfg.lru_purge_enable = true;
-    cfg.recv_wait_timeout = 5;
-    cfg.send_wait_timeout = 5;
+    cfg.recv_wait_timeout = 3;
+    cfg.send_wait_timeout = 2;   /* a stalled client must not freeze the one httpd thread */
 
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
@@ -437,6 +450,7 @@ esp_err_t http_server_start(void)
         { .uri = "/api/wifi/save",  .method = HTTP_POST, .handler = h_api_wifi_save },
         { .uri = "/api/wifi/state", .method = HTTP_GET,  .handler = h_api_wifi_state },
         { .uri = "/api/logs",      .method = HTTP_GET,  .handler = h_api_logs },
+        { .uri = "/api/thingspeak", .method = HTTP_GET,  .handler = h_api_ts_get },
         { .uri = "/generate_204",   .method = HTTP_GET,  .handler = h_captive },
         { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = h_captive },
         { .uri = "/ncsi.txt",       .method = HTTP_GET,  .handler = h_captive },

@@ -94,13 +94,13 @@ function renderStatusInner(st) {
   const num = (v, d) => (typeof v === "number" && isFinite(v)) ? v.toFixed(d) : "--";
 
   $("v-temp").textContent = (sst & 0x01) ? num(st.temp, 2) : "--";
-  $("v-cur").textContent  = (sst & 0x04) ? num(st.cur, 3)  : "--";
+  $("v-cur").textContent  = (sst & 0x04) ? num(st.cur * 1000, 1)  : "--";
   $("v-vib").textContent  = (sst & 0x02) ? num(st.vib, 3)  : "--";
   $("v-alm").textContent = alarmNames.length;
   $("v-alm-names").textContent = alarmNames.join(", ") || "none";
 
   $("kpi-temp-sub").textContent = "thr " + st.th.t.toFixed(1);
-  $("kpi-cur-sub").textContent = "thr " + st.th.c.toFixed(2);
+  $("kpi-cur-sub").textContent = "thr " + (st.th.c * 1000).toFixed(0);
   $("kpi-vib-sub").textContent = "thr " + st.th.v.toFixed(2);
 
   $("kpi-temp").classList.toggle("alert", !!(st.alm & 0x01));
@@ -138,7 +138,7 @@ function renderStatusInner(st) {
 
   /* threshold + rate inputs follow the live values until edited */
   if (document.activeElement !== $("thr-temp")) $("thr-temp").value = st.th.t;
-  if (document.activeElement !== $("thr-cur"))  $("thr-cur").value = st.th.c;
+  if (document.activeElement !== $("thr-cur"))  $("thr-cur").value = Math.round(st.th.c * 1000);
   if (document.activeElement !== $("thr-vib"))  $("thr-vib").value = st.th.v;
   if (document.activeElement !== $("rate-ms"))  $("rate-ms").value = st.rate;
 
@@ -171,7 +171,7 @@ async function refreshHistory() {
     S.hist = [[], [], []];
     for (const p of h.pts) {
       S.hist[0].push([p[0], p[1]]);
-      S.hist[1].push([p[0], p[2]]);
+      S.hist[1].push([p[0], p[2] * 1000]);
       S.hist[2].push([p[0], p[3]]);
     }
     charts.redraw();
@@ -183,16 +183,58 @@ async function refreshHistory() {
  * threshold line, min/max/avg and the live value. Redraws at 1 Hz. */
 
 const CHARTS = [
-  { cv: null, color: "#e8823e", unit: "C",  thrKey: "t", fmt: (v) => v.toFixed(2) },
-  { cv: null, color: "#4aa3ff", unit: "A",  thrKey: "c", fmt: (v) => v.toFixed(3) },
-  { cv: null, color: "#a06aff", unit: "g",  thrKey: "v", fmt: (v) => v.toFixed(2) },
+  { cv: null, color: "#e8823e", name: "Temperature", unit: "°C", thrKey: "t",
+    minSpan: 2,    floor0: false, scale: 1 },
+  { cv: null, color: "#4aa3ff", name: "Current",     unit: "mA", thrKey: "c",
+    minSpan: 2,    floor0: true,  scale: 1000 },
+  { cv: null, color: "#a06aff", name: "Vibration",   unit: "g",  thrKey: "v",
+    minSpan: 0.05, floor0: true,  scale: 1 },
 ];
+
+/* "Nice" axis steps (1, 2, 5 x 10^n) so tick labels are round numbers. */
+function niceStep(range, ticks) {
+  const raw = range / ticks;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / p;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
+}
+function decimalsFor(step) {
+  return Math.min(4, Math.max(0, -Math.floor(Math.log10(step) + 1e-9)));
+}
+/* Relative time label: 0 -> "now", 90 -> "-1m 30s". */
+function agoLabel(sec) {
+  sec = Math.round(sec);
+  if (sec <= 0) return "now";
+  if (sec < 60) return "-" + sec + "s";
+  const m = Math.floor(sec / 60), r = sec % 60;
+  return "-" + m + "m" + (r ? " " + r + "s" : "");
+}
+function timeStep(win) {
+  for (const s of [5, 10, 15, 30, 60, 120, 300, 600]) {
+    if (win / s <= 6) return s;
+  }
+  return 600;
+}
 
 const charts = {
   init() {
     CHARTS[0].cv = $("chart-temp");
     CHARTS[1].cv = $("chart-cur");
     CHARTS[2].cv = $("chart-vib");
+    for (const c of CHARTS) {
+      const move = (ev) => {
+        const r = c.cv.getBoundingClientRect();
+        const p = ev.touches ? ev.touches[0] : ev;
+        c.hoverX = p.clientX - r.left;
+        this.redraw();
+      };
+      const leave = () => { c.hoverX = null; this.redraw(); };
+      c.cv.addEventListener("mousemove", move);
+      c.cv.addEventListener("touchstart", move, { passive: true });
+      c.cv.addEventListener("touchmove", move, { passive: true });
+      c.cv.addEventListener("mouseleave", leave);
+      c.cv.addEventListener("touchend", leave);
+    }
     window.addEventListener("resize", () => this.resize());
     this.resize();
   },
@@ -203,7 +245,7 @@ const charts = {
       const dpr = window.devicePixelRatio || 1;
       const w = c.cv.clientWidth || 560;
       c.cv.width = Math.round(w * dpr);
-      c.cv.height = Math.round(170 * dpr);
+      c.cv.height = Math.round(230 * dpr);
     }
     this.redraw();
   },
@@ -213,10 +255,10 @@ const charts = {
     const now = S.lastStatus ? S.lastStatus.ts : 0;
     const tEnd = now || (S.hist[0].length ? S.hist[0][S.hist[0].length - 1][0] : 0);
     const tStart = tEnd - S.win * 1000;
-
     for (let i = 0; i < CHARTS.length; i++) {
-      this.drawOne(CHARTS[i], S.hist[i], tStart, tEnd,
-                   S.lastStatus ? S.lastStatus.th[CHARTS[i].thrKey] : null);
+      const thr = S.lastStatus && S.lastStatus.th
+        ? S.lastStatus.th[CHARTS[i].thrKey] * CHARTS[i].scale : null;
+      this.drawOne(CHARTS[i], S.hist[i], tStart, tEnd, thr);
     }
   },
 
@@ -227,108 +269,159 @@ const charts = {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
-    const padL = 42, padR = 10, padT = 10, padB = 20;
+    const padL = 52, padR = 12, padT = 22, padB = 38;
     const plotW = W - padL - padR, plotH = H - padT - padB;
+    const span = Math.max(1, tEnd - tStart);
 
-    /* --- value range over the visible window (data + threshold) --- */
-    let lo = Infinity, hi = -Infinity, n = 0, sum = 0;
-    for (const [t, v] of pts) {
-      if (t < tStart - 5000) continue;
-      n++; sum += v;
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
+    /* --- visible data + stats --- */
+    const vis = [];
+    let dLo = Infinity, dHi = -Infinity, sum = 0;
+    for (const p of pts) {
+      if (p[0] < tStart - 2000) continue;
+      vis.push(p);
+      sum += p[1];
+      if (p[1] < dLo) dLo = p[1];
+      if (p[1] > dHi) dHi = p[1];
     }
+
+    /* --- dynamic Y range: follows the data, with a minimum span so noise
+     *     is not blown up. The limit line only joins the scale when it is
+     *     near the data; otherwise it is announced as off-scale. --- */
+    let lo = isFinite(dLo) ? dLo : 0, hi = isFinite(dHi) ? dHi : 1;
+    let thrState = "none";
     if (threshold != null && isFinite(threshold)) {
-      lo = Math.min(lo, threshold);
-      hi = Math.max(hi, threshold);
+      const reach = Math.max(hi - lo, c.minSpan) * 3;
+      if (threshold >= lo - reach && threshold <= hi + reach) {
+        lo = Math.min(lo, threshold); hi = Math.max(hi, threshold);
+        thrState = "in";
+      } else {
+        thrState = threshold > hi ? "above" : "below";
+      }
     }
-    if (!isFinite(lo)) { lo = 0; hi = 1; }
-    if (hi - lo < 1e-6) { hi = lo + Math.max(Math.abs(lo) * 0.05, 0.01); }
-    const pad = (hi - lo) * 0.12;
-    lo -= pad; hi += pad;
+    if (hi - lo < c.minSpan) {
+      const mid = (hi + lo) / 2;
+      lo = mid - c.minSpan / 2; hi = mid + c.minSpan / 2;
+    }
+    const padV = (hi - lo) * 0.1;
+    lo -= padV; hi += padV;
+    if (c.floor0 && lo < 0) lo = 0;
+    const step = niceStep(hi - lo, 4);
+    lo = Math.floor(lo / step) * step;
+    hi = Math.ceil(hi / step) * step;
+    const dec = decimalsFor(step);
 
-    const xOf = (t) => padL + ((t - tStart) / (tEnd - tStart)) * plotW;
+    const xOf = (t) => padL + ((t - tStart) / span) * plotW;
     const yOf = (v) => padT + plotH - ((v - lo) / (hi - lo)) * plotH;
 
-    /* --- grid + Y labels --- */
-    ctx.strokeStyle = "#232b38";
+    /* --- panel title (what + unit) --- */
+    ctx.font = "600 12px sans-serif";
+    ctx.fillStyle = c.color;
+    ctx.textAlign = "left";
+    ctx.fillText(c.name + " (" + c.unit + ")", padL, 14);
+
+    /* --- Y grid + labels --- */
+    ctx.font = "11px sans-serif";
+    ctx.lineWidth = 1;
+    ctx.textAlign = "right";
+    for (let v = lo; v <= hi + step / 2; v += step) {
+      const y = Math.round(yOf(v)) + 0.5;
+      ctx.strokeStyle = "#232b38";
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.fillStyle = "#9aa6b8";
+      ctx.fillText(v.toFixed(dec), padL - 6, y + 4);
+    }
+
+    /* --- X grid + labels: time ago, "now" at the right edge --- */
+    const tstep = timeStep(S.win);
+    ctx.textAlign = "center";
+    for (let s = 0; s <= S.win + 0.001; s += tstep) {
+      const x = Math.round(xOf(tEnd - s * 1000)) + 0.5;
+      ctx.strokeStyle = "#232b38";
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillStyle = "#9aa6b8";
+      ctx.fillText(agoLabel(s), Math.min(Math.max(x, padL + 8), W - padR - 8), H - 20);
+    }
     ctx.fillStyle = "#7d8899";
     ctx.font = "10px sans-serif";
-    ctx.lineWidth = 1;
-    const ticks = 4;
-    for (let i = 0; i <= ticks; i++) {
-      const v = lo + ((hi - lo) * i) / ticks;
-      const y = Math.round(yOf(v)) + 0.5;
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(W - padR, y);
-      ctx.stroke();
-      ctx.fillText(c.fmt(v), 4, y + 3);
-    }
+    ctx.textAlign = "center";
+    ctx.fillText("time (ago)  ->  now", padL + plotW / 2, H - 6);
 
-    /* --- X labels: window-relative seconds --- */
-    const xt = 4;
-    for (let i = 0; i <= xt; i++) {
-      const f = i / xt;
-      const x = Math.round(padL + f * plotW) + 0.5;
-      ctx.strokeStyle = "#232b38";
-      ctx.beginPath();
-      ctx.moveTo(x, padT);
-      ctx.lineTo(x, padT + plotH);
-      ctx.stroke();
-      const s = Math.round((1 - f) * S.win);
-      const lab = s >= 90 ? Math.round(s / 60) + "m" : s + "s";
-      ctx.fillStyle = "#7d8899";
-      ctx.fillText(lab, x - 8, H - 6);
-    }
-
-    /* --- threshold line --- */
-    if (threshold != null && isFinite(threshold)
-        && threshold >= lo && threshold <= hi) {
+    /* --- limit line --- */
+    ctx.font = "10px sans-serif";
+    if (thrState === "in") {
       ctx.strokeStyle = "#e8564e";
       ctx.setLineDash([5, 4]);
       const y = Math.round(yOf(threshold)) + 0.5;
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(W - padR, y);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
       ctx.setLineDash([]);
+      ctx.fillStyle = "#e8564e";
+      ctx.textAlign = "right";
+      ctx.fillText("alarm limit " + threshold.toFixed(dec), W - padR - 2, y - 3);
+    } else if (thrState !== "none") {
+      ctx.fillStyle = "#e8564e";
+      ctx.textAlign = "right";
+      ctx.fillText("alarm limit " + threshold.toFixed(dec) + " " + c.unit +
+                   (thrState === "above" ? " (above chart)" : " (below chart)"),
+                   W - padR - 2, padT + 10);
     }
 
     /* --- the series --- */
-    ctx.strokeStyle = c.color;
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    let started = false, lastX = 0, lastY = 0;
-    for (const [t, v] of pts) {
-      if (t < tStart - 5000) continue;
-      const x = xOf(t), y = yOf(v);
-      if (!started) { ctx.moveTo(x, y); started = true; }
-      else ctx.lineTo(x, y);
-      lastX = x; lastY = y;
+    if (!vis.length) {
+      ctx.fillStyle = "#7d8899";
+      ctx.textAlign = "center";
+      ctx.font = "12px sans-serif";
+      ctx.fillText("waiting for data...", padL + plotW / 2, padT + plotH / 2);
+      return;
     }
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    vis.forEach((p, i) => {
+      const x = xOf(p[0]), y = yOf(p[1]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
     ctx.stroke();
 
-    /* --- live dot + stats --- */
-    if (started) {
-      ctx.fillStyle = c.color;
-      ctx.beginPath();
-      ctx.arc(lastX, lastY, 3, 0, 2 * Math.PI);
-      ctx.fill();
-    }
-    if (n > 0) {
-      const mean = sum / n;
-      let mn = Infinity, mx = -Infinity;
-      for (const [t, v] of pts) {
-        if (t < tStart - 5000) continue;
-        if (v < mn) mn = v; if (v > mx) mx = v;
+    const last = vis[vis.length - 1];
+    ctx.fillStyle = c.color;
+    ctx.beginPath(); ctx.arc(xOf(last[0]), yOf(last[1]), 3.5, 0, 2 * Math.PI); ctx.fill();
+
+    /* --- readout: now / min / avg / max --- */
+    const f = (v) => v.toFixed(Math.max(dec, 1));
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#c7d0dc";
+    ctx.textAlign = "right";
+    ctx.fillText("now " + f(last[1]) + "   min " + f(dLo) + "   avg " +
+                 f(sum / vis.length) + "   max " + f(dHi) + " " + c.unit,
+                 W - padR, 14);
+
+    /* --- hover: crosshair + exact value and time --- */
+    if (c.hoverX != null && c.hoverX >= padL && c.hoverX <= W - padR) {
+      const th = tStart + ((c.hoverX - padL) / plotW) * span;
+      let best = vis[0], bd = Infinity;
+      for (const p of vis) {
+        const d = Math.abs(p[0] - th);
+        if (d < bd) { bd = d; best = p; }
       }
-      ctx.fillStyle = "#7d8899";
-      ctx.font = "10px sans-serif";
-      ctx.fillText(
-        "n " + n + "   min " + c.fmt(mn) + "   avg " + c.fmt(mean) +
-        "   max " + c.fmt(mx) + " " + c.unit,
-        padL + 6, padT + 11);
+      const hx = xOf(best[0]), hy = yOf(best[1]);
+      ctx.strokeStyle = "#8896aa";
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(hx, padT); ctx.lineTo(hx, padT + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(hx, hy, 4, 0, 2 * Math.PI); ctx.fill();
+      const txt = f(best[1]) + " " + c.unit + "  @ " +
+                  agoLabel((tEnd - best[0]) / 1000);
+      ctx.font = "600 11px sans-serif";
+      const tw = ctx.measureText(txt).width + 12;
+      const bx = Math.min(Math.max(hx - tw / 2, padL), W - padR - tw);
+      const by = Math.max(hy - 28, padT + 2);
+      ctx.fillStyle = "rgba(15,20,28,.92)";
+      ctx.fillRect(bx, by, tw, 18);
+      ctx.strokeStyle = c.color; ctx.strokeRect(bx + .5, by + .5, tw - 1, 17);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left";
+      ctx.fillText(txt, bx + 6, by + 13);
     }
   },
 };
@@ -336,7 +429,7 @@ const charts = {
 function appendLivePoint(st) {
   const t = st.ts;
   S.hist[0].push([t, st.temp]);
-  S.hist[1].push([t, st.cur]);
+  S.hist[1].push([t, st.cur * 1000]);
   S.hist[2].push([t, st.vib]);
   const cutoff = t - (S.win * 1000 + 5000);
   for (const ch of S.hist) {
@@ -364,6 +457,26 @@ const CONN = {
   polling: false,
   histAt: 0,
 };
+
+/* 5 Hz fast path: update the big numbers immediately; do the heavy
+ * full render only when alarms / link state change. */
+function onLive(l) {
+  CONN.lastRx = performance.now();
+  CONN.lastOkWall = Date.now();
+  const prev = S.lastStatus;
+  if (!prev) return;
+  const changed = prev.alm !== l.alm || prev.link !== l.link;
+  Object.assign(prev, { ts: l.ts, link: l.link, age: l.age, temp: l.temp,
+                        cur: l.cur, vib: l.vib, alm: l.alm, sstat: l.sstat });
+  if (changed) { renderStatus(prev); return; }
+  const num = (v, d) => (typeof v === "number" && isFinite(v)) ? v.toFixed(d) : "--";
+  const sst = l.sstat | 0;
+  $("v-temp").textContent = (sst & 0x01) ? num(l.temp, 2) : "--";
+  $("v-cur").textContent  = (sst & 0x04) ? num(l.cur * 1000, 1)  : "--";
+  $("v-vib").textContent  = (sst & 0x02) ? num(l.vib, 3)  : "--";
+  $("hdr-clock").textContent = fmtClock(l.ts);
+  showConn(true);
+}
 
 function setWsUp(up) {
   S.wsUp = up;
@@ -423,6 +536,7 @@ function connectWs() {
     try {
       const st = JSON.parse(m.data);
       if (st && st.type === "status") onStatus(st);
+      else if (st && st.type === "live") onLive(st);
     } catch (e) { /* ignore malformed */ }
   };
   ws.onclose = () => {
@@ -492,7 +606,7 @@ $("thr-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const jobs = [
     [0, parseFloat($("thr-temp").value), "thr-temp"],
-    [1, parseFloat($("thr-cur").value), "thr-cur"],
+    [1, parseFloat($("thr-cur").value) / 1000, "thr-cur"],
     [2, parseFloat($("thr-vib").value), "thr-vib"],
   ].filter((j) => isFinite(j[1]));
 
@@ -509,25 +623,6 @@ $("rate-form").addEventListener("submit", async (e) => {
   const ms = parseInt($("rate-ms").value, 10);
   const r = await post("/api/rate", { ms: ms });
   flash($("rate-msg"), r.ok, r.ok ? "sample rate applied" : r.err);
-});
-
-$("btn-led-g").addEventListener("click", async () => {
-  S.led.g = !S.led.g;
-  const r = await post("/api/led", { id: 0, on: S.led.g });
-  $("btn-led-g").classList.toggle("on", r.ok && S.led.g);
-  flash($("ctl-msg"), r.ok, r.ok ? "green LED " + (S.led.g ? "on" : "off") : r.err);
-});
-
-$("btn-led-r").addEventListener("click", async () => {
-  S.led.r = !S.led.r;
-  const r = await post("/api/led", { id: 2, on: S.led.r });
-  $("btn-led-r").classList.toggle("on", r.ok && S.led.r);
-  flash($("ctl-msg"), r.ok, r.ok ? "relay " + (S.led.r ? "tripped" : "released") : r.err);
-});
-
-$("btn-alarm-reset").addEventListener("click", async () => {
-  const r = await post("/api/alarm/reset", {});
-  flash($("ctl-msg"), r.ok, r.ok ? "alarm reset sent" : r.err);
 });
 
 $("btn-reboot-stm32").addEventListener("click", async () => {

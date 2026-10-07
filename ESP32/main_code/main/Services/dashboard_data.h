@@ -105,6 +105,9 @@ void dashboard_data_note_esp_stats(uint32_t free_heap, uint32_t min_heap,
  */
 size_t dashboard_data_build_status_json(char *buf, size_t cap);
 
+/** Tiny (~150 B) fast-path message: {"type":"live",...}. Sent at 5 Hz. */
+size_t dashboard_data_build_live_json(char *buf, size_t cap);
+
 /** 1 Hz sampler: push the current live values into the history ring. */
 void dashboard_data_sample_tick(void);
 

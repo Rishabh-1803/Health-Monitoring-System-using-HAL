@@ -34,7 +34,8 @@ static const char *TAG = "TASK_DASH";
 
 #define DASH_STACK   8192
 #define DASH_PRIO     4
-#define DASH_PERIOD_MS 1000
+#define DASH_PERIOD_MS 100      /* fast live push (10 Hz)        */
+#define DASH_SLOW_EVERY 10      /* full status + history = 1 Hz  */
 
 #define HIST_FLASH_EVERY_S  60u      /* one CSV line per minute       */
 
@@ -85,32 +86,50 @@ static void task_dashboard(void *arg)
     /* Static, not on the stack: the 3.5 KB buffer plus float formatting was
      * most of the old 6 KB stack. Only this task touches it. */
     static char json[3584];
+    char live[256];
+    uint32_t tick = 0u;
+    uint32_t last_age = UINT32_MAX;
     while (1) {
         esp_task_wdt_reset();
 
-        dashboard_data_sample_tick();
-        push_link_stats();
-        dashboard_data_note_esp_stats(esp_get_free_heap_size(),
-                                      esp_get_minimum_free_heap_size(),
-                                      system_stats_cpu_load());
-        sync_config_once();
-
-        /* Flash history: one line per minute. */
-        if (++s_flash_counter >= HIST_FLASH_EVERY_S) {
-            s_flash_counter = 0u;
-            hr_sample_t last;
-            if (dashboard_data_copy_history_since(
-                    dashboard_data_uptime_ms() - 2000u, &last, 1u) == 1u) {
-                littlefs_storage_append_history(last.t_ms, last.v);
+        /* Fast path: ~150 B, every 200 ms. */
+        /* Only push when a new telemetry packet arrived (its age dropped),
+         * plus once a second as a keep-alive: sending the same numbers
+         * again just loads WiFi and the single httpd thread. */
+        uint32_t age = dashboard_data_telemetry_age_ms();
+        if (age < last_age || (tick % DASH_SLOW_EVERY) == 0u) {
+            size_t ln = dashboard_data_build_live_json(live, sizeof(live));
+            if (ln > 0u && ln < sizeof(live)) {
+                websocket_server_broadcast(live, ln);
             }
         }
+        last_age = age;
 
-        size_t n = dashboard_data_build_status_json(json, sizeof(json));
-        if (n > 0u && n < sizeof(json)) {
-            websocket_server_broadcast(json, n);
-        } else if (n >= sizeof(json)) {
-            ESP_LOGE(TAG, "status JSON truncated (%u >= %u)",
-                     (unsigned)n, (unsigned)sizeof(json));
+        /* Slow path: once per second. */
+        if ((++tick % DASH_SLOW_EVERY) == 0u) {
+            dashboard_data_sample_tick();
+            push_link_stats();
+            dashboard_data_note_esp_stats(esp_get_free_heap_size(),
+                                          esp_get_minimum_free_heap_size(),
+                                          system_stats_cpu_load());
+            sync_config_once();
+
+            if (++s_flash_counter >= HIST_FLASH_EVERY_S) {
+                s_flash_counter = 0u;
+                hr_sample_t last;
+                if (dashboard_data_copy_history_since(
+                        dashboard_data_uptime_ms() - 2000u, &last, 1u) == 1u) {
+                    littlefs_storage_append_history(last.t_ms, last.v);
+                }
+            }
+
+            size_t n = dashboard_data_build_status_json(json, sizeof(json));
+            if (n > 0u && n < sizeof(json)) {
+                websocket_server_broadcast(json, n);
+            } else if (n >= sizeof(json)) {
+                ESP_LOGE(TAG, "status JSON truncated (%u >= %u)",
+                         (unsigned)n, (unsigned)sizeof(json));
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(DASH_PERIOD_MS));

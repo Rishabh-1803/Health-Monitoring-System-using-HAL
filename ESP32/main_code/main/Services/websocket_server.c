@@ -189,11 +189,15 @@ esp_err_t websocket_server_ws_handler(httpd_req_t *req)
     memset(&frame, 0, sizeof(frame));
     uint8_t buf[128];
     frame.payload = buf;
-    frame.len = sizeof(buf);
+    /* len MUST be 0 here: a non-zero len tells httpd "header already read"
+     * and it then waits for that many payload bytes (until the receive
+     * timeout), freezing the server and killing the socket. With 0 it parses
+     * the header itself and sets len to the real size. */
+    frame.len = 0;
 
     esp_err_t err = httpd_ws_recv_frame(req, &frame, sizeof(buf));
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "recv failed (0x%x)", err);
+        ESP_LOGD(TAG, "recv failed (0x%x) — client went away", err);
         return err;
     }
 

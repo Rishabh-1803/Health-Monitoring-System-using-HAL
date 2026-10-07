@@ -26,6 +26,8 @@ idf_component_register(
         "Services/websocket_server.c"
         "Services/system_stats.c"
         "Services/logger.c"
+        "Services/thingspeak.c"
+        "Tasks/task_thingspeak.c"
         "Services/littlefs_storage.c"
         "Drivers/cli.c"
     INCLUDE_DIRS

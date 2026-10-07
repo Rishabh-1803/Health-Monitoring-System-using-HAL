@@ -55,54 +55,6 @@ bool littlefs_storage_ok(void)
 
 /* ------------------------------------------------------------------ */
 
-bool littlefs_storage_save_config(const float thr[3], uint16_t rate_ms)
-{
-    if (!s_ok || thr == NULL) {
-        return false;
-    }
-    FILE *f = fopen(CFG_PATH, "w");
-    if (f == NULL) {
-        return false;
-    }
-    fprintf(f, "{\"thr_t\":%.2f,\"thr_c\":%.2f,\"thr_v\":%.2f,\"rate\":%u}\n",
-            (double)thr[0], (double)thr[1], (double)thr[2],
-            (unsigned)rate_ms);
-    fclose(f);
-    return true;
-}
-
-bool littlefs_storage_load_config(float thr_out[3], uint16_t *rate_out)
-{
-    if (!s_ok) {
-        return false;
-    }
-    FILE *f = fopen(CFG_PATH, "r");
-    if (f == NULL) {
-        return false;
-    }
-    char buf[128] = { 0 };
-    size_t n = fread(buf, 1, sizeof(buf) - 1u, f);
-    fclose(f);
-    buf[n] = '\0';
-
-    /* Reuse the fixed-key scanners from json_util (pure C). */
-    double t = 0, c = 0, v = 0;
-    long long rate = 200;
-    if (json_find_double(buf, "thr_t", &t) != 0
-        || json_find_double(buf, "thr_c", &c) != 0
-        || json_find_double(buf, "thr_v", &v) != 0
-        || json_find_long(buf, "rate", &rate) != 0) {
-        return false;
-    }
-    thr_out[0] = (float)t;
-    thr_out[1] = (float)c;
-    thr_out[2] = (float)v;
-    if (rate_out != NULL) {
-        *rate_out = (rate >= 50 && rate <= 1000) ? (uint16_t)rate : 200u;
-    }
-    return true;
-}
-
 /* ------------------------------------------------------------------ */
 
 static void rotate_if_full(const char *path, const char *old_path,
@@ -186,10 +138,6 @@ void littlefs_storage_append_log(uint32_t t_ms, uint8_t level,
 
 void littlefs_storage_mount(void) { }
 bool littlefs_storage_ok(void) { return false; }
-bool littlefs_storage_save_config(const float thr[3], uint16_t rate_ms)
-{ (void)thr; (void)rate_ms; return false; }
-bool littlefs_storage_load_config(float thr_out[3], uint16_t *rate_out)
-{ (void)thr_out; (void)rate_out; return false; }
 void littlefs_storage_append_history(uint32_t t_ms, const float v[3])
 { (void)t_ms; (void)v; }
 void littlefs_storage_append_log(uint32_t t_ms, uint8_t level,
@@ -197,3 +145,63 @@ void littlefs_storage_append_log(uint32_t t_ms, uint8_t level,
 { (void)t_ms; (void)level; (void)tag; (void)text; }
 
 #endif /* HMS_USE_LITTLEFS */
+
+/* ------------------------------------------------------------------ */
+/*  Config (thresholds + sample rate): always stored in NVS            */
+/*  so it survives a reset even when LittleFS is disabled.             */
+/* ------------------------------------------------------------------ */
+
+#include "nvs.h"
+#include <math.h>
+
+#define CFG_NS   "hms_cfg"
+#define CFG_KEY  "cfg"
+
+typedef struct {
+    float    thr[3];
+    uint16_t rate;
+    uint16_t magic;
+} stored_cfg_t;
+
+#define CFG_MAGIC 0xC0F1u
+
+bool littlefs_storage_save_config(const float thr[3], uint16_t rate_ms)
+{
+    if (thr == NULL) {
+        return false;
+    }
+    stored_cfg_t c = { { thr[0], thr[1], thr[2] }, rate_ms, CFG_MAGIC };
+    nvs_handle_t h;
+    if (nvs_open(CFG_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+    bool ok = (nvs_set_blob(h, CFG_KEY, &c, sizeof(c)) == ESP_OK)
+              && (nvs_commit(h) == ESP_OK);
+    nvs_close(h);
+    return ok;
+}
+
+bool littlefs_storage_load_config(float thr_out[3], uint16_t *rate_out)
+{
+    nvs_handle_t h;
+    if (thr_out == NULL || nvs_open(CFG_NS, NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    stored_cfg_t c;
+    size_t len = sizeof(c);
+    esp_err_t err = nvs_get_blob(h, CFG_KEY, &c, &len);
+    nvs_close(h);
+    if (err != ESP_OK || len != sizeof(c) || c.magic != CFG_MAGIC) {
+        return false;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (!isfinite(c.thr[i])) {
+            return false;
+        }
+        thr_out[i] = c.thr[i];
+    }
+    if (rate_out != NULL) {
+        *rate_out = (c.rate >= 50u && c.rate <= 1000u) ? c.rate : 200u;
+    }
+    return true;
+}

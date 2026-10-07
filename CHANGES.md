@@ -333,3 +333,24 @@ status buffers 3.5 KB. Host tests: 53 + 54 pass.
 5. **ESP32 rebooted itself 2 min after the STM32 went silent** (task_watchdog.c), taking the
    dashboard down exactly when it should say "STM32 LINK DOWN". It now keeps serving.
 6. Hostname `health-monitor` set on the station interface.
+
+## v6 — fixed address `http://project.local/` + 5 Hz live values
+- mDNS hostname `project` is started in every WiFi mode and does not depend on the SSID, so
+  changing router/password keeps the same address (`main/idf_component.yml` pulls espressif/mdns).
+- New 150-byte `live` WebSocket message every 200 ms (temp/current/vibration/alarms/link);
+  full status + chart history stay at 1 Hz.
+
+## v7 — current shown in mA everywhere
+Web KPI, chart, threshold box, ESP32 CLI (`thr set c <mA>`), STM32 OLED + console now use mA.
+The UART protocol still carries amps, so both MCUs stay compatible. UART RX buffer 512 -> 2048 B.
+
+## v8 — ThingSpeak upload
+Paste the channel Write API Key in the dashboard (ThingSpeak card) or `ts key <KEY>` on the serial console.
+Uploads every 20 s: f1 temp C, f2 current mA, f3 vibration g, f4 alarm bits, f5 STM32 CPU %, f6 RSSI, f7 link, f8 sensor bits.
+
+## v9 — readable dynamic charts + load-removal ride-through
+- Charts: round Y ticks that follow the data (with a minimum span), titled panels with units,
+  X axis in "time ago -> now", alarm-limit line only when near the data (else a note), now/min/avg/max
+  readout, hover/touch crosshair with exact value and time.
+- STM32 current: after a glitch (load removed) value drops to 0 mA after 0.3 s, FAULT only after 1.5 s,
+  INA219 re-detected at 5 Hz instead of 1 Hz.  >>> Re-flash the STM32 for this part. <<<

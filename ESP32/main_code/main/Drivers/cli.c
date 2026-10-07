@@ -21,6 +21,7 @@
 #include "task_uart_tx.h"
 #include "system_stats.h"
 #include "logger.h"
+#include "thingspeak.h"
 #include "littlefs_storage.h"
 
 #include "esp_console.h"
@@ -95,8 +96,8 @@ static int cmd_status(int argc, char **argv)
     if (s.ever_linked) {
         printf("  telemetry:   %lu ms old\n",
                (unsigned long)s.telemetry_age_ms);
-        printf("  temp/cur/vib: %.2f C / %.3f A / %.3f g (RMS)\n",
-               (double)s.temp_c, (double)s.current_a, (double)s.vib_g);
+        printf("  temp/cur/vib: %.2f C / %.1f mA / %.3f g (RMS)\n",
+               (double)s.temp_c, (double)s.current_a * 1000.0, (double)s.vib_g);
     } else {
         printf("  telemetry:   never received\n");
     }
@@ -109,8 +110,8 @@ static int cmd_status(int argc, char **argv)
     printf("  cpu/heap/up: %.1f%% / %lu B / %u s\n",
            (double)s.stm32_cpu_10000 / 100.0,
            (unsigned long)s.stm32_heap, (unsigned)s.stm32_uptime_s);
-    printf("  thresholds:  temp %.1f C  cur %.2f A  vib %.2f g\n",
-           (double)s.thr[0], (double)s.thr[1], (double)s.thr[2]);
+    printf("  thresholds:  temp %.1f C  cur %.0f mA  vib %.2f g\n",
+           (double)s.thr[0], (double)s.thr[1] * 1000.0, (double)s.thr[2]);
     printf("  sample rate: %u ms\n", (unsigned)s.sample_period_ms);
 
     printf("== ESP32 ==\n");
@@ -215,12 +216,32 @@ static int cmd_hist(int argc, char **argv)
 /*  Commands: STM32 control (via the dispatcher)                      */
 /* ================================================================== */
 
+static int cmd_ts(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "send") == 0) {
+        printf(thingspeak_upload_now() ? "sent\n" : "failed (see ts status)\n");
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "status") == 0) {
+        char b[256];
+        thingspeak_status_json(b, sizeof(b));
+        printf("%s\n", b);
+        return 0;
+    }
+    printf("usage: ts send | ts status\n");
+    return 1;
+}
+
 static int cmd_thr(int argc, char **argv)
 {
     if (argc == 1) {
         for (uint8_t id = 0; id < 3u; id++) {
-            printf("%-8s %.2f\n", thr_name(id),
-                   (double)dashboard_data_get_threshold(id));
+            double v = (double)dashboard_data_get_threshold(id);
+            if (id == 1u) {
+                printf("%-8s %.0f mA\n", thr_name(id), v * 1000.0);
+            } else {
+                printf("%-8s %.2f\n", thr_name(id), v);
+            }
         }
         return 0;
     }
@@ -234,7 +255,10 @@ static int cmd_thr(int argc, char **argv)
             return 1;
         }
         float value = strtof(argv[3], NULL);
-        printf("setting %s to %.2f ... ", thr_name(id), (double)value);
+        if (id == 1u) {
+            value /= 1000.0f;            /* CLI takes mA, protocol uses A */
+        }
+        printf("setting %s to %.3f ... ", thr_name(id), (double)value);
         cmd_result_t r = command_set_threshold(id, value, CLI_CMD_TIMEOUT_MS);
         print_cmd_result(r);
         if (r == CMD_OK) {
@@ -247,7 +271,7 @@ static int cmd_thr(int argc, char **argv)
         return (r == CMD_OK) ? 0 : 1;
     }
     printf("usage: thr           show thresholds\n");
-    printf("       thr set <t|c|v> <value>\n");
+    printf("       thr set <t|c|v> <value>   (c is in mA)\n");
     return 1;
 }
 
@@ -397,6 +421,7 @@ void cli_start(void)
     reg("alarm-reset",  "acknowledge + clear STM32 alarms",         NULL, cmd_alarm_reset);
     reg("reboot-stm32", "hard-reset the STM32 node",                NULL, cmd_reboot_stm32);
     reg("reboot",       "reboot the ESP32",                         NULL, cmd_reboot);
+    reg("ts",           "ThingSpeak upload", "send | status", cmd_ts);
     reg("wifi",         "show / set / clear wifi credentials",      "[set SSID PASS | clear]", cmd_wifi);
 
     ESP_ERROR_CHECK(esp_console_start_repl(repl));

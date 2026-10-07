@@ -17,7 +17,7 @@ static const char *TAG = "UART_LINK";
 #define UART_TX_PIN         17
 #define UART_RX_PIN         18
 #define UART_BAUD_RATE      460800
-#define UART_BUF_SIZE       512
+#define UART_BUF_SIZE       2048
 #define UART_QUEUE_SIZE     20
 
 /* TX serialiser: the heartbeat task and the command dispatcher both

@@ -49,6 +49,14 @@ bool console_println(const char *s);
  */
 bool console_printf(const char *fmt, ...);
 
+/**
+ * True when a console print would be handed to USB immediately. Periodic
+ * status lines check this first: with the USB cable plugged in but no
+ * terminal open, a normal print can wait ~1 s for a host that never reads,
+ * which would stall the telemetry loop to the ESP32. Skip instead.
+ */
+bool console_can_print_now(void);
+
 /* ------------------------------------------------------------------ */
 /*  Input                                                             */
 /* ------------------------------------------------------------------ */

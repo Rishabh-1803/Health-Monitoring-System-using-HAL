@@ -63,16 +63,39 @@ async function post(path, body) {
 /* ================= ui ================= */
 
 function renderStatus(st) {
+  try { renderStatusInner(st); }
+  catch (e) { console.error("renderStatus", e); }
+}
+
+function renderStatusInner(st) {
   S.lastStatus = st;
+  st.th  = st.th  || { t: 0, c: 0, v: 0 };
+  st.esp = st.esp || {};
 
   const alarmNames = [];
   for (const [bit, name] of Object.entries(ALM_BITS)) {
     if (st.alm & Number(bit)) alarmNames.push(name);
   }
 
-  $("v-temp").textContent = st.temp.toFixed(2);
-  $("v-cur").textContent = st.cur.toFixed(3);
-  $("v-vib").textContent = st.vib.toFixed(2);
+  // Sensor-health bits from the STM32: 0x01 DS18B20, 0x02 MPU6050, 0x04 INA219.
+  // A failed sensor shows "--" and a red FAULT tag instead of a confident 0.
+  const sst = st.sstat | 0;
+  const linked = st.link !== false && st.age !== 4294967295;
+  const sensorTag = (id, ok) => {
+    const el = $(id);
+    if (!el) return;
+    if (!linked) { el.textContent = "no data"; el.className = "sens idle"; return; }
+    el.textContent = ok ? "OK" : "FAULT";
+    el.className = "sens " + (ok ? "ok" : "bad");
+  };
+  sensorTag("sens-ds",  !!(sst & 0x01));
+  sensorTag("sens-mpu", !!(sst & 0x02));
+  sensorTag("sens-ina", !!(sst & 0x04));
+  const num = (v, d) => (typeof v === "number" && isFinite(v)) ? v.toFixed(d) : "--";
+
+  $("v-temp").textContent = (sst & 0x01) ? num(st.temp, 2) : "--";
+  $("v-cur").textContent  = (sst & 0x04) ? num(st.cur, 3)  : "--";
+  $("v-vib").textContent  = (sst & 0x02) ? num(st.vib, 3)  : "--";
   $("v-alm").textContent = alarmNames.length;
   $("v-alm-names").textContent = alarmNames.join(", ") || "none";
 
@@ -141,9 +164,10 @@ function renderEvents(evs) {
 /* ================= history / charts =============================== */
 
 async function refreshHistory() {
+  if (typeof CONN !== "undefined") CONN.histAt = Date.now();
   try {
-    const r = await fetch("/api/history?win=" + S.win);
-    const h = await r.json();
+    const h = await fetchJson("/api/history?win=" + S.win, 5000);
+    if (!h || !Array.isArray(h.pts)) return;
     S.hist = [[], [], []];
     for (const p of h.pts) {
       S.hist[0].push([p[0], p[1]]);
@@ -321,42 +345,140 @@ function appendLivePoint(st) {
   charts.redraw();
 }
 
-/* ================= websocket + fallback ================= */
+/* ================= live connection =================
+ *
+ * Three layers, so the page keeps updating whatever goes wrong:
+ *   1. WebSocket push (1 Hz) -- the normal path.
+ *   2. Polling /api/status every second whenever nothing arrived in the
+ *      last 2.5 s (socket down, stalled, or blocked by a proxy).
+ *   3. A stale-socket watchdog: a socket that is "open" but silent for 6 s
+ *      is closed and re-opened (half-dead TCP after WiFi drops).
+ * Every fetch has a hard timeout so a hung request cannot freeze the
+ * refresh loop, and the header shows exactly how fresh the data is.
+ */
+
+const CONN = {
+  lastRx: 0,          // performance.now() of the last status, any path
+  lastOkWall: 0,      // wall-clock of the last status
+  wsTries: 0,
+  polling: false,
+  histAt: 0,
+};
 
 function setWsUp(up) {
   S.wsUp = up;
   $("ws-dot").classList.toggle("up", up);
 }
 
+function onStatus(st) {
+  CONN.lastRx = performance.now();
+  CONN.lastOkWall = Date.now();
+  renderStatus(st);
+  appendLivePoint(st);
+  showConn(true);
+}
+
+/* Banner + chip showing connection state and data age. */
+function showConn(ok) {
+  const chip = $("hdr-wifi");
+  const ftr = $("ftr-link");
+  const ban = $("conn-banner");
+  if (ok) {
+    if (ban) ban.classList.add("hidden");
+    return;
+  }
+  const age = CONN.lastOkWall
+    ? Math.round((Date.now() - CONN.lastOkWall) / 1000) + " s ago" : "never";
+  if (ban) {
+    ban.classList.remove("hidden");
+    $("conn-banner-text").textContent =
+      "Dashboard not connected to the ESP32 — retrying every second " +
+      "(last data: " + age + ")";
+  }
+  if (chip) chip.textContent = "offline";
+  if (ftr) ftr.textContent = "ESP32 unreachable";
+}
+
 function connectWs() {
-  const proto = location.protocol === "https:" ? "wss://" : "ws://";
-  const ws = new WebSocket(proto + location.host + "/ws");
+  let ws;
+  try {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    ws = new WebSocket(proto + location.host + "/ws");
+  } catch (e) {
+    setTimeout(connectWs, 2000);
+    return;
+  }
   S.ws = ws;
 
-  ws.onopen = () => { setWsUp(true); refreshHistory(); };
+  ws.onopen = () => {
+    CONN.wsTries = 0; setWsUp(true); refreshHistory();
+    // Client->server traffic marks the socket "recently used" in httpd's LRU
+    // table; without it the idle-looking WebSocket is the first one purged.
+    clearInterval(S.wsPing);
+    S.wsPing = setInterval(() => {
+      try { if (ws.readyState === 1) ws.send("ping"); } catch (e) { /* closing */ }
+    }, 8000);
+  };
   ws.onmessage = (m) => {
     try {
       const st = JSON.parse(m.data);
-      if (st.type === "status") {
-        renderStatus(st);
-        appendLivePoint(st);
-      }
+      if (st && st.type === "status") onStatus(st);
     } catch (e) { /* ignore malformed */ }
   };
   ws.onclose = () => {
+    clearInterval(S.wsPing);
     setWsUp(false);
-    setTimeout(connectWs, 2000);
+    CONN.wsTries++;
+    // 1 s, 2 s, 3 s ... capped at 5 s: quick recovery without hammering.
+    setTimeout(connectWs, Math.min(5000, 1000 * CONN.wsTries));
   };
-  ws.onerror = () => ws.close();
+  ws.onerror = () => { try { ws.close(); } catch (e) { /* already closed */ } };
 }
 
-/* Polling fallback: when the socket is down, keep the page alive. */
-setInterval(() => {
-  if (S.wsUp) return;
-  fetch("/api/status").then((r) => r.json()).then((st) => {
-    if (st && st.type === "status") renderStatus(st);
-  }).catch(() => {});
-}, 2500);
+async function fetchJson(path, timeoutMs) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(path, { cache: "no-store", signal: ctl.signal });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* The refresh loop: runs every second, forever. */
+async function refreshTick() {
+  const idleMs = performance.now() - CONN.lastRx;
+
+  // Watchdog: socket claims to be open but has been silent too long.
+  if (S.wsUp && S.ws && idleMs > 6000) {
+    try { S.ws.close(); } catch (e) { /* ignore */ }
+  }
+
+  // Poll whenever push data is not arriving on time.
+  if (idleMs > 2500 && !CONN.polling) {
+    CONN.polling = true;
+    try {
+      const st = await fetchJson("/api/status", 2500);
+      if (st && st.type === "status") onStatus(st);
+    } catch (e) {
+      showConn(false);
+    } finally {
+      CONN.polling = false;
+    }
+  }
+
+  // Heal the charts once a minute (and straight after any outage).
+  if (Date.now() - CONN.histAt > 60000) refreshHistory();
+}
+setInterval(refreshTick, 1000);
+
+// Coming back to the tab / network: refresh immediately.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { CONN.lastRx = 0; refreshTick(); }
+});
+window.addEventListener("online", () => { CONN.lastRx = 0; refreshTick(); });
 
 /* ================= control wiring ================= */
 
@@ -420,7 +542,25 @@ $("wifi-form").addEventListener("submit", async (e) => {
     ssid: $("wifi-ssid").value.trim(),
     pass: $("wifi-pass").value,
   });
-  if (!r.ok) alert("save failed: " + (r.err || "?"));
+  const msg = $("wifi-msg");
+  const say = (t, ok) => {
+    if (msg) { msg.textContent = t; msg.className = "msg " + (ok ? "ok" : "err"); }
+    else { alert(t); }
+  };
+  if (r.ok) {
+    say("Saved. The ESP32 is restarting and will join \"" +
+        $("wifi-ssid").value.trim() + "\". Reconnect this device to that " +
+        "WiFi, then open the IP printed on the ESP32 serial monitor.", true);
+  } else if (/Failed to fetch|NetworkError|abort/i.test(String(r.err))) {
+    // The reply can be lost if the ESP32 restarts (and its AP vanishes)
+    // before the browser reads it: that normally means the save worked.
+    say("Connection to the ESP32 dropped right after sending — it has most " +
+        "likely saved and is restarting. Reconnect to your normal WiFi and " +
+        "open the IP shown on the ESP32 serial monitor. If the " +
+        "\"monitor-setup\" network is still there after 20 s, try again.", true);
+  } else {
+    say("Save failed: " + (r.err || "unknown error"), false);
+  }
 });
 
 $("win-btns").addEventListener("click", (e) => {

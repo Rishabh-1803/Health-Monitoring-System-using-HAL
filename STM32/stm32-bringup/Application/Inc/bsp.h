@@ -125,6 +125,12 @@ bool bsp_i2c_read_reg(uint8_t addr7, uint8_t reg, uint8_t *data, uint32_t len);
 /** Write a single register byte. */
 bool bsp_i2c_write_reg(uint8_t addr7, uint8_t reg, uint8_t value);
 
+/** Failed single attempts since boot (each one is retried once). */
+uint32_t bsp_i2c_error_count(void);
+
+/** Times a stuck bus was freed with the 9-clock recovery since boot. */
+uint32_t bsp_i2c_recover_count(void);
+
 /* ------------------------------------------------------------------ */
 /*  ADC                                                               */
 /* ------------------------------------------------------------------ */

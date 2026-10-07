@@ -391,8 +391,8 @@ static bool i2c_read_bit(bool *bit)
     SDA_HIGH();                 /* let the slave drive it */
     i2c_half();
     if (!scl_release_and_wait()) { return false; }
-    *bit = SDA_READ();
-    i2c_half();
+    i2c_half();                 /* sample mid-way through SCL high: a weak   */
+    *bit = SDA_READ();          /* pull-up / slow slave has settled by now   */
     SCL_LOW();
     return true;
 }
@@ -454,13 +454,18 @@ bool bsp_i2c_recover(void)
 
 bool bsp_i2c_probe(uint8_t addr7)
 {
-    if (!i2c_start()) { return false; }
+    if (!i2c_start()) {
+        (void)bsp_i2c_recover();        /* SCL/SDA stuck: free the bus */
+        return false;
+    }
     bool ack = i2c_write_byte((uint8_t)((addr7 << 1) | 0u));   /* write bit */
     i2c_stop();
     return ack;
 }
 
-bool bsp_i2c_write(uint8_t addr7, const uint8_t *data, uint32_t len)
+/* ---- raw single-attempt transactions ---- */
+
+static bool i2c_write_once(uint8_t addr7, const uint8_t *data, uint32_t len)
 {
     if (!i2c_start()) { return false; }
     if (!i2c_write_byte((uint8_t)((addr7 << 1) | 0u))) { i2c_stop(); return false; }
@@ -471,7 +476,7 @@ bool bsp_i2c_write(uint8_t addr7, const uint8_t *data, uint32_t len)
     return true;
 }
 
-bool bsp_i2c_read(uint8_t addr7, uint8_t *data, uint32_t len)
+static bool i2c_read_once(uint8_t addr7, uint8_t *data, uint32_t len)
 {
     if (len == 0u) { return false; }
     if (!i2c_start()) { return false; }
@@ -484,7 +489,7 @@ bool bsp_i2c_read(uint8_t addr7, uint8_t *data, uint32_t len)
     return true;
 }
 
-bool bsp_i2c_read_reg(uint8_t addr7, uint8_t reg, uint8_t *data, uint32_t len)
+static bool i2c_read_reg_once(uint8_t addr7, uint8_t reg, uint8_t *data, uint32_t len)
 {
     if (len == 0u) { return false; }
 
@@ -501,6 +506,53 @@ bool bsp_i2c_read_reg(uint8_t addr7, uint8_t reg, uint8_t *data, uint32_t len)
     }
     i2c_stop();
     return true;
+}
+
+/* ---- self-healing wrappers ----
+ *
+ * A bit-banged bus has no hardware to un-wedge it: if one transfer is cut
+ * short (a UART interrupt storm, a relay-click supply glitch, a slave that
+ * browned out mid-byte) the slave can keep SDA low and EVERY later
+ * transaction then fails until the MCU is reset. That is exactly the
+ * "sensor works for a while, then reads nothing forever" symptom.
+ *
+ * So each public call gets one retry, and before the retry the bus is
+ * recovered (9 clocks + STOP) if either line is stuck low. The error
+ * counter is exposed so the console diagnostics can show bus health. */
+static uint32_t s_i2c_errors   = 0u;
+static uint32_t s_i2c_recovers = 0u;
+
+static void i2c_heal(void)
+{
+    s_i2c_errors++;
+    if (!(SDA_READ() && SCL_READ())) {
+        s_i2c_recovers++;
+        (void)bsp_i2c_recover();
+    }
+}
+
+uint32_t bsp_i2c_error_count(void)   { return s_i2c_errors;   }
+uint32_t bsp_i2c_recover_count(void) { return s_i2c_recovers; }
+
+bool bsp_i2c_write(uint8_t addr7, const uint8_t *data, uint32_t len)
+{
+    if (i2c_write_once(addr7, data, len)) { return true; }
+    i2c_heal();
+    return i2c_write_once(addr7, data, len);
+}
+
+bool bsp_i2c_read(uint8_t addr7, uint8_t *data, uint32_t len)
+{
+    if (i2c_read_once(addr7, data, len)) { return true; }
+    i2c_heal();
+    return i2c_read_once(addr7, data, len);
+}
+
+bool bsp_i2c_read_reg(uint8_t addr7, uint8_t reg, uint8_t *data, uint32_t len)
+{
+    if (i2c_read_reg_once(addr7, reg, data, len)) { return true; }
+    i2c_heal();
+    return i2c_read_reg_once(addr7, reg, data, len);
 }
 
 bool bsp_i2c_write_reg(uint8_t addr7, uint8_t reg, uint8_t value)

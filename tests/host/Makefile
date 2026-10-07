@@ -21,10 +21,17 @@ CFLAGS += -I$(MAIN_SRC)/Protocol -I$(MAIN_SRC)/Services
 test_host: $(SRCS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS)
 
-run: test_host
+APP = ../../STM32/stm32-bringup/Application
+
+# Driver behaviour tests for the STM32 I2C sensors (simulated bus).
+test_sensors: test_sensors.c $(APP)/Src/ina219.c $(APP)/Src/mpu6050.c
+	$(CC) -std=gnu11 -Wall -Wextra -O1 -I$(APP)/Inc -o $@ $^ -lm
+
+run: test_host test_sensors
 	./test_host
+	./test_sensors
 
 clean:
-	rm -f test_host
+	rm -f test_host test_sensors
 
 .PHONY: run clean

@@ -2,17 +2,24 @@
  * @file    mpu6050.h
  * @brief   MPU6050 6-axis accel/gyro driver (I2C) used as the vibration source.
  *
- * Replaces the SW-420 digital switch path. The MPU6050 is read for its
- * accelerometer; vibration is the high-passed magnitude of the total
- * acceleration vector in g, which is a real (not estimated) quantity and is
- * directly comparable to the threshold the operator sets.
+ * The accelerometer is read as three signed axes in g. The application
+ * high-passes each axis and reports the RMS of the dynamic part as the
+ * vibration level, which is a real physical quantity directly comparable to
+ * the threshold the operator sets.
  *
- * Config defaults (bringup_config.h): address 0x68 (AD0=GND), accel range
- * +-2 g (16384 LSB/g). Change MPU6050_ACCEL_RANGE for a different FSR; the
- * divisor is derived from it so the g math stays correct.
- *
- * All reads are non-blocking (~1.5 ms at 250 kHz I2C) and safe to call from
- * the cooperative telemetry loop.
+ * What this driver guards against (all were real failure modes):
+ *   - clone / variant chips   WHO_AM_I is NOT required to be exactly 0x68;
+ *                             MPU6050 clones and MPU6500/9250 parts (0x70,
+ *                             0x71, 0x98 ...) share the same accel register
+ *                             map and work fine.
+ *   - AD0 strapped high       0x68 and 0x69 are both probed.
+ *   - stuck in SLEEP          a full device reset + wake with PLL clock.
+ *   - power glitch / relay    mpu6050_service() re-checks PWR_MGMT_1 about
+ *     click resets the chip   once per second and re-configures it.
+ *   - frozen / zeroed data    all-0x00 / all-0xFF bursts are rejected, and a
+ *                             sensor returning bit-identical data for ~4 s
+ *                             is treated as hung and re-initialised.
+ *   - missing at boot         mpu6050_service() keeps re-probing.
  */
 #ifndef MPU6050_H
 #define MPU6050_H
@@ -26,31 +33,36 @@
 #define MPU6050_REG_GYRO_CONFIG  0x1Bu
 #define MPU6050_REG_ACCEL_CONFIG 0x1Cu
 #define MPU6050_REG_ACCEL_XOUT_H 0x3Bu
+#define MPU6050_REG_TEMP_OUT_H   0x41u
 #define MPU6050_REG_PWR_MGMT_1   0x6Bu
+#define MPU6050_REG_PWR_MGMT_2   0x6Cu
 #define MPU6050_REG_WHO_AM_I     0x75u
 
-/** Probe + wake + configure the MPU6050. Returns true if WHO_AM_I matched. */
+/** Probe + reset + wake + configure. True if a device answered and is awake. */
 bool mpu6050_init(void);
 
-/** True after a successful mpu6050_init(). */
+/** True while a configured MPU6050 is believed present and responding. */
 bool mpu6050_is_present(void);
 
 /**
- * Read the three accelerometer axes in g (float, signed).
- * Returns false on I2C failure (out unchanged).
+ * Housekeeping, call about once per second from the main loop: re-probes when
+ * absent, re-configures if the chip was reset, re-initialises a hung one.
  */
+void mpu6050_service(void);
+
+/** Read the three accelerometer axes in g. False on failure (out unchanged). */
 bool mpu6050_read_accel_g(float *ax_g, float *ay_g, float *az_g);
 
-/**
- * Read the total acceleration magnitude in g: sqrt(ax^2+ay^2+az^2).
- * At rest this is ~1.0 g (gravity). Vibration is the deviation above the
- * slow baseline, which the app high-passes.
- */
+/** Total acceleration magnitude in g (about 1.0 at rest). */
 bool mpu6050_read_magnitude_g(float *mag_g);
 
-/**
- * Read the die temperature in degrees Celsius.
- */
+/** Die temperature in degrees Celsius. */
 bool mpu6050_read_temp_c(float *temp_c);
+
+/** 7-bit address in use (0x68/0x69), 0 when absent. */
+uint8_t mpu6050_address(void);
+
+/** Value read from WHO_AM_I at the last init (diagnostics). */
+uint8_t mpu6050_who_am_i(void);
 
 #endif /* MPU6050_H */

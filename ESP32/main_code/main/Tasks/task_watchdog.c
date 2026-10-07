@@ -34,7 +34,7 @@
 
 static const char *TAG = "WATCHDOG";
 
-#define WDT_TASK_STACK   3072
+#define WDT_TASK_STACK   4096
 #define WDT_TASK_PRIO     2
 #define SUPERVISE_MS    5000
 
@@ -68,6 +68,7 @@ static void task_watchdog(void *arg)
 
     uint32_t silent_since = 0u;       /* 0 = link currently healthy    */
     bool escalated = false;
+    bool hard_logged = false;
     uint32_t last_heap_warn = 0u;
 
     while (1) {
@@ -92,13 +93,16 @@ static void task_watchdog(void *arg)
                                 (unsigned long)(silent_ms / 1000u));
                     (void)command_reboot_stm32(3000u);
                 } else if (escalated
-                           && silent_ms > STM32_SILENT_HARD_MS) {
+                           && silent_ms > STM32_SILENT_HARD_MS
+                           && !hard_logged) {
+                    /* The ESP32 used to reboot itself here. That made the
+                     * dashboard vanish exactly when it was needed to show
+                     * "STM32 link down" (loose wire, STM32 reset, ...).
+                     * Keep serving; just record it once. */
+                    hard_logged = true;
                     logger_logf(LOG_LVL_ERR, "supervisor",
-                                "STM32 silent %lus — rebooting ESP32",
+                                "STM32 silent %lus — still serving dashboard",
                                 (unsigned long)(silent_ms / 1000u));
-                    logger_flush();
-                    vTaskDelay(pdMS_TO_TICKS(200));
-                    esp_restart();
                 }
             } else {
                 if (silent_since != 0u) {
@@ -107,6 +111,7 @@ static void task_watchdog(void *arg)
                 }
                 silent_since = 0u;
                 escalated = false;
+                hard_logged = false;
             }
         }
 

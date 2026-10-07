@@ -29,13 +29,18 @@
   </p>
   <form id="wifi-form" class="form-row">
     <input id="wifi-ssid" type="text" placeholder="SSID" maxlength="32" required>
-    <input id="wifi-pass" type="password" placeholder="password" maxlength="64" required>
+    <input id="wifi-pass" type="password" placeholder="password (blank = open network)" maxlength="64">
     <button type="submit" class="primary">Save &amp; reboot</button>
   </form>
+  <div id="wifi-msg" class="msg"></div>
 </section>
 
 <!-- Live view -->
 <div id="live">
+
+  <div id="conn-banner" class="alarm-banner conn-banner hidden">
+    <span id="conn-banner-text">Dashboard not connected</span>
+  </div>
 
   <div id="alarm-banner" class="alarm-banner hidden">
     <span id="alarm-banner-text">ALARMS ACTIVE</span>
@@ -45,17 +50,17 @@
     <div class="card kpi" id="kpi-temp">
       <div class="kpi-label">Temperature</div>
       <div class="kpi-value"><span id="v-temp">--</span><span class="unit">°C</span></div>
-      <div class="kpi-sub" id="kpi-temp-sub">thr --</div>
+      <div class="kpi-sub"><span id="kpi-temp-sub">thr --</span> <span class="sens" id="sens-ds">--</span></div>
     </div>
     <div class="card kpi" id="kpi-cur">
-      <div class="kpi-label">Current</div>
+      <div class="kpi-label">Current <span class="muted">(INA219)</span></div>
       <div class="kpi-value"><span id="v-cur">--</span><span class="unit">A</span></div>
-      <div class="kpi-sub" id="kpi-cur-sub">thr --</div>
+      <div class="kpi-sub"><span id="kpi-cur-sub">thr --</span> <span class="sens" id="sens-ina">--</span></div>
     </div>
     <div class="card kpi" id="kpi-vib">
-      <div class="kpi-label">Vibration <span class="muted">(est.)</span></div>
+      <div class="kpi-label">Vibration <span class="muted">(MPU6050 RMS)</span></div>
       <div class="kpi-value"><span id="v-vib">--</span><span class="unit">g</span></div>
-      <div class="kpi-sub" id="kpi-vib-sub">thr --</div>
+      <div class="kpi-sub"><span id="kpi-vib-sub">thr --</span> <span class="sens" id="sens-mpu">--</span></div>
     </div>
     <div class="card kpi" id="kpi-alm">
       <div class="kpi-label">Alarms</div>

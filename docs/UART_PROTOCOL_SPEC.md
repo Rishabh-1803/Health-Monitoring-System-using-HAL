@@ -81,7 +81,7 @@ final XOR. Check values: `""→0xFFFF`, `"123456789"→0x29B1`.
 | 4 | float | current_a — filtered A (rectified) |
 | 8 | float | vibration_g — **estimate** (§7) |
 | 12 | u8 | alarm_bits (§6) |
-| 13 | u8 | sensor_status (bit0 = DS18B20 ok) |
+| 13 | u8 | sensor_status (bit0 DS18B20 ok, bit1 MPU6050 ok, bit2 INA219 ok) |
 | 14 | u16 | cpu_load_pct — 0..10000 = 0..100.00 % |
 | 16 | u16 | free_heap_bytes / 16 |
 | 18 | u16 | uptime_seconds (wraps 18.2 h) |

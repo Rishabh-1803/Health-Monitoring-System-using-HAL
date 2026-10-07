@@ -32,7 +32,7 @@
 
 static const char *TAG = "TASK_DASH";
 
-#define DASH_STACK   6144
+#define DASH_STACK   8192
 #define DASH_PRIO     4
 #define DASH_PERIOD_MS 1000
 
@@ -82,7 +82,9 @@ static void task_dashboard(void *arg)
 
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
 
-    char json[2400];
+    /* Static, not on the stack: the 3.5 KB buffer plus float formatting was
+     * most of the old 6 KB stack. Only this task touches it. */
+    static char json[3584];
     while (1) {
         esp_task_wdt_reset();
 

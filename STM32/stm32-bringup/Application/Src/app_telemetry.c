@@ -8,6 +8,7 @@
  * pass) always sees a live loop.
  *
  * Per tick:
+ *   0. (1 Hz) I2C sensor supervision: re-detect / re-configure / un-hang
  *   1. INA219 (I2C)  : shunt current, 8-sample rolling average   (~fast)
  *   2. MPU6050 (I2C) : accel magnitude, high-passed to vibration (~fast)
  *   3. DS18B20       : non-blocking state machine (see below)     (~fast)
@@ -31,12 +32,18 @@
  *            bad   -> fail streak++; 5 in a row = SENSOR_FAIL alarm
  *   READ --> IDLE
  *
- * Vibration: the MPU6050 accelerometer gives a REAL acceleration magnitude
- * (sqrt(ax^2+ay^2+az^2)). A slow baseline (init = 1 g for gravity) is tracked
- * so the displayed vibration_g is the high-passed dynamic component in true
- * g -- directly comparable to the threshold, no calibration factor needed.
- * Current: the INA219 measures the shunt voltage over I2C; an 8-sample
- * rolling average keeps the number real-time yet noise-stable.
+ * Vibration: the MPU6050 accelerometer gives REAL 3-axis acceleration. Each
+ * axis has a slow baseline (gravity + mounting tilt) subtracted, and the
+ * reported vibration_g is the RMS of what is left, in true g -- directly
+ * comparable to the threshold, no calibration factor needed.
+ * Current: the INA219 measures the shunt voltage over I2C (PGA /8, so a
+ * 0.1 ohm shunt reads up to 3.2 A); an 8-sample rolling average keeps the
+ * number real-time yet noise-stable.
+ * Sensor health: both I2C sensors are supervised once a second
+ * (ina219_service / mpu6050_service): a missing, reset or hung sensor is
+ * re-detected and re-configured automatically, and a sustained failure
+ * clears its sensor-ok bit and zeroes its value instead of leaving a
+ * stale number on the dashboard.
  *
  * Watchdog: driven at register level (IWDG->KR/PRL/RLR) rather than
  * through HAL, because the CubeMX project never enabled the IWDG module
@@ -66,6 +73,7 @@
 #include "stm32f4xx_hal.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "oled.h"
 #include "ina219.h"
 #include "mpu6050.h"
@@ -88,8 +96,12 @@
 #define DS_FAIL_STREAK          5u      /* consecutive bad reads = fail    */
 
 #define CUR_AVG_N               8u      /* current rolling-average depth   */
-#define VIB_BASELINE_ALPHA      0.02f   /* slow gravity/DC tracker (MPU6050)*/
-#define VIB_EMA_ALPHA           0.3f    /* vibration smoothing coefficient */
+#define VIB_BASELINE_ALPHA      0.05f   /* slow gravity/tilt tracker/axis  */
+#define VIB_EMA_ALPHA           0.15f   /* smoothing of the vibration power*/
+#define SENSOR_OK_FAIL_TICKS    5u      /* bad reads before ok-bit clears  */
+#define SENSOR_ZERO_FAIL_TICKS  25u     /* bad reads before value -> 0     */
+#define SENSOR_SERVICE_MS       1000u   /* I2C sensor supervision period   */
+#define DIAG_PRINT_MS           2000u   /* I2C sensor diagnostics line     */
 #define OLED_REBUILD_MS         250u    /* framebuffer refresh interval    */
 #define EMA_TEMP                0.25f   /* temperature filter coefficient  */
 
@@ -137,7 +149,8 @@ static uint8_t    s_ds_scratch[9];
 /* Alarm channels (index = threshold id: 0 temp, 1 current, 2 vibration) */
 static alarm_channel_t s_alarms[3] = {
     { .threshold = 60.0f, .clear_level = 57.0f, 0, 0, 0 },  /* temp   */
-    { .threshold = 4.0f,  .clear_level = 3.6f,  0, 0, 0 },  /* current*/
+    { .threshold = DEFAULT_THRESH_CURRENT_A,
+      .clear_level = DEFAULT_THRESH_CURRENT_A * 0.9f, 0, 0, 0 },  /* current*/
     { .threshold = 0.5f,  .clear_level = 0.45f, 0, 0, 0 },  /* vib (g)*/
 };
 static uint8_t s_alarm_bits     = 0u;    /* composed ALARM_BIT_*         */
@@ -172,7 +185,13 @@ static bool     s_mpu6050_ok    = false;
 static float    s_cur_buf[CUR_AVG_N];   /* rolling current samples */
 static uint32_t s_cur_idx       = 0u;
 static bool     s_cur_full      = false;
-static float    s_vib_baseline_g = 1.0f; /* slow gravity/DC tracker */
+static float    s_vib_base[3]   = { 0.0f, 0.0f, 0.0f }; /* per-axis gravity */
+static bool     s_vib_seeded    = false;
+static float    s_vib_pwr       = 0.0f;  /* EMA of dynamic accel power (g^2) */
+static uint32_t s_cur_fail      = 0u;    /* consecutive bad INA219 reads     */
+static uint32_t s_vib_fail      = 0u;    /* consecutive bad MPU6050 reads    */
+static uint32_t s_next_service  = 0u;
+static uint32_t s_next_diag     = 0u;
 static uint8_t  s_oled_page     = 0u;    /* round-robin page flush */
 static uint32_t s_next_oled_rebuild = 0u;
 
@@ -317,16 +336,30 @@ static void send_alarm_event(uint8_t bit, const char *name,
  * dashboard can show the fault instead of a confident zero. */
 static void sample_current(void)
 {
-    int32_t cur_ma = 0;
-    if (!ina219_read_current_ma(&cur_ma)) {
-        s_ina219_ok = false;
+    float amps = 0.0f;
+    if (!ina219_read_current_a(&amps)) {
+        s_cur_fail++;
+        if (s_cur_fail >= SENSOR_OK_FAIL_TICKS) {
+            s_ina219_ok = false;
+        }
+        if (s_cur_fail == SENSOR_ZERO_FAIL_TICKS) {
+            /* Sensor is gone for good: a frozen last value would sit on the
+             * dashboard (and could hold an alarm) forever. Show 0 + fault. */
+            memset(s_cur_buf, 0, sizeof(s_cur_buf));
+            s_cur_idx  = 0u;
+            s_cur_full = false;
+            s_current_a = 0.0f;
+        }
         return;
     }
+    s_cur_fail  = 0u;
     s_ina219_ok = true;
 
-    float amps = (float)cur_ma / 1000.0f;
     if (amps < 0.0f) {
         amps = -amps;               /* rectify: load current, not sign  */
+    }
+    if (amps * 1000.0f < (float)INA219_DEADBAND_MA) {
+        amps = 0.0f;                /* offset/noise floor, not load     */
     }
 
     s_cur_buf[s_cur_idx] = amps;
@@ -351,30 +384,53 @@ static void sample_current(void)
 /*  Sensor: MPU6050 acceleration on I2C (replaces SW-420 digital)    */
 /* ================================================================== */
 
-/* Vibration is now a REAL quantity: the deviation of the total
- * acceleration magnitude from a slow baseline. The baseline ( initialised
- * to 1 g = gravity) tracks the DC level with a small alpha so mounting
- * orientation does not matter; vibration_g is the high-passed dynamic
- * component, smoothed with a light EMA. This is directly comparable to the
- * operator-set threshold in real g, unlike the old SW-420 edges/s estimate. */
+/* Vibration is a REAL quantity: per-axis, the slow baseline (gravity and
+ * the mounting tilt) is tracked with a small alpha and subtracted, and
+ * vibration_g is the RMS of the remaining 3-axis dynamic acceleration,
+ * smoothed on the power (g^2) so it is always >= 0 and unbiased.
+ *
+ * Working per axis (not on the vector magnitude) matters: for vibration
+ * perpendicular to gravity the magnitude barely changes (second order),
+ * so a magnitude-only detector misses sideways shaking entirely.
+ *
+ * The baseline is seeded from the first good sample, so there is no
+ * start-up transient and no assumption about orientation or about the
+ * individual sensor's offset. */
 static void sample_vibration(void)
 {
-    float mag_g = 0.0f;
-    if (!mpu6050_read_magnitude_g(&mag_g)) {
-        s_mpu6050_ok = false;
+    float a[3];
+    if (!mpu6050_read_accel_g(&a[0], &a[1], &a[2])) {
+        s_vib_fail++;
+        if (s_vib_fail >= SENSOR_OK_FAIL_TICKS) {
+            s_mpu6050_ok = false;
+        }
+        if (s_vib_fail == SENSOR_ZERO_FAIL_TICKS) {
+            s_vib_g_est  = 0.0f;
+            s_vib_pwr    = 0.0f;
+            s_vib_seeded = false;       /* re-seed when it comes back      */
+        }
         return;
     }
+    s_vib_fail   = 0u;
     s_mpu6050_ok = true;
 
-    /* Slow baseline so the high-pass follows gravity + DC drift only. */
-    s_vib_baseline_g += VIB_BASELINE_ALPHA * (mag_g - s_vib_baseline_g);
-
-    /* Dynamic component: |instant - baseline|. */
-    float dev = mag_g - s_vib_baseline_g;
-    if (dev < 0.0f) {
-        dev = -dev;
+    if (!s_vib_seeded) {
+        for (int i = 0; i < 3; i++) { s_vib_base[i] = a[i]; }
+        s_vib_pwr    = 0.0f;
+        s_vib_g_est  = 0.0f;
+        s_vib_seeded = true;
+        return;
     }
-    s_vib_g_est += VIB_EMA_ALPHA * (dev - s_vib_g_est);
+
+    float p = 0.0f;
+    for (int i = 0; i < 3; i++) {
+        float d = a[i] - s_vib_base[i];          /* dynamic part          */
+        p += d * d;
+        s_vib_base[i] += VIB_BASELINE_ALPHA * d; /* follow gravity/tilt   */
+    }
+    s_vib_pwr += VIB_EMA_ALPHA * (p - s_vib_pwr);
+    if (s_vib_pwr < 0.0f) { s_vib_pwr = 0.0f; }
+    s_vib_g_est = sqrtf(s_vib_pwr);              /* RMS, in g             */
 }
 
 /* ================================================================== */
@@ -648,6 +704,13 @@ static void apply_threshold(uint8_t id, float value)
             if (value > 30.0f) { value = 30.0f; }
             s_alarms[1].threshold  = value;
             s_alarms[1].clear_level = value * 0.9f;
+            if (value * 1000.0f > (float)INA219_FULL_SCALE_MA) {
+                /* The alarm could never fire: the sensor clips first. */
+                (void)console_printf("[WARN] current threshold %d/100 A is above the INA219 range (%u mA)\r\n",
+                                     (int)(value * 100.0f),
+                                     (unsigned)INA219_FULL_SCALE_MA);
+                send_debug(1u, "current threshold above INA219 range");
+            }
             break;
         case THRESHOLD_ID_VIBRATION:
             if (value < 0.0f) { value = 0.0f; }
@@ -838,6 +901,39 @@ static void print_status_line(void)
         s_comm_fail ? "COMM-FAIL" : "link ok");
 }
 
+/* I2C sensor diagnostics: the line to read first when a value looks wrong.
+ * Integer-only formatting so the build needs no float printf. */
+static void print_diag_line(void)
+{
+    char ina[56];
+    char mpu[48];
+
+    if (ina219_is_present()) {
+        uint32_t bus_mv = 0u;
+        int32_t  raw    = 0;
+        (void)ina219_read_bus_mv(&bus_mv);
+        (void)ina219_read_shunt_raw(&raw);
+        snprintf(ina, sizeof(ina), "0x%02X bus %u.%02uV shunt %ld*10uV%s",
+                 (unsigned)ina219_address(),
+                 (unsigned)(bus_mv / 1000u), (unsigned)((bus_mv % 1000u) / 10u),
+                 (long)raw, ina219_saturated() ? " CLIPPED" : "");
+    } else {
+        snprintf(ina, sizeof(ina), "NOT FOUND");
+    }
+
+    if (mpu6050_is_present()) {
+        snprintf(mpu, sizeof(mpu), "0x%02X who 0x%02X",
+                 (unsigned)mpu6050_address(), (unsigned)mpu6050_who_am_i());
+    } else {
+        snprintf(mpu, sizeof(mpu), "NOT FOUND");
+    }
+
+    (void)console_printf("[I2C] INA219 %s | MPU6050 %s | bus err %lu rec %lu\r\n",
+                         ina, mpu,
+                         (unsigned long)bsp_i2c_error_count(),
+                         (unsigned long)bsp_i2c_recover_count());
+}
+
 /* ================================================================== */
 /*  OLED live status page                                             */
 /* ================================================================== */
@@ -917,8 +1013,18 @@ void app_telemetry_run(void)
      * optional: a missing device clears its ok-bit and the app keeps
      * running on whatever it can read, so a loose wire degrades the
      * dashboard instead of hanging the loop. */
+    (void)bsp_i2c_recover();    /* free a bus left wedged by a previous run */
     (void)ina219_init();
     (void)mpu6050_init();
+    s_ina219_ok  = ina219_is_present();
+    s_mpu6050_ok = mpu6050_is_present();
+    print_diag_line();
+    if (!ina219_is_present()) {
+        (void)console_println("[WARN] INA219 not found -- check wiring/address; will keep retrying");
+    }
+    if (!mpu6050_is_present()) {
+        (void)console_println("[WARN] MPU6050 not found -- check wiring/AD0; will keep retrying");
+    }
     if (oled_init()) {
         oled_clear();
         oled_text(0, 0, "HEALTH MONITOR");
@@ -930,8 +1036,14 @@ void app_telemetry_run(void)
     memset(s_cur_buf, 0, sizeof(s_cur_buf));
     s_cur_idx = 0u;
     s_cur_full = false;
-    s_vib_baseline_g = 1.0f;
+    s_vib_seeded = false;
+    s_vib_pwr = 0.0f;
     s_vib_g_est = 0.0f;
+    s_cur_fail = 0u;
+    s_vib_fail = 0u;
+    s_current_a = 0.0f;
+    s_next_service = HAL_GetTick() + SENSOR_SERVICE_MS;
+    s_next_diag = HAL_GetTick() + DIAG_PRINT_MS;
     s_ds_state = DS_IDLE;
     s_ds_next_read = HAL_GetTick();
     s_last_rx_tick = HAL_GetTick();
@@ -956,6 +1068,13 @@ void app_telemetry_run(void)
         if (!banner_sent && now >= 500u) {
             send_debug(0u, "STM32 telemetry app booted");
             banner_sent = true;
+        }
+
+        /* Sensor supervision (~1 Hz): re-detect / re-configure / un-hang. */
+        if ((int32_t)(now - s_next_service) >= 0) {
+            s_next_service = now + SENSOR_SERVICE_MS;
+            ina219_service();
+            mpu6050_service();
         }
 
         sample_current();
@@ -991,7 +1110,11 @@ void app_telemetry_run(void)
         /* Console status line. */
         if ((int32_t)(now - s_next_status) >= 0) {
             s_next_status = now + STATUS_PRINT_MS;
-            print_status_line();
+            if (console_can_print_now()) { print_status_line(); }
+        }
+        if ((int32_t)(now - s_next_diag) >= 0) {
+            s_next_diag = now + DIAG_PRINT_MS;
+            if (console_can_print_now()) { print_diag_line(); }
         }
 
         /* OLED: rebuild the framebuffer on a rolling cadence, then

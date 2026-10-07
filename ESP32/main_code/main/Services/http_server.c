@@ -146,7 +146,7 @@ static esp_err_t h_captive(httpd_req_t *req)
 
 static esp_err_t h_api_status(httpd_req_t *req)
 {
-    char buf[2400];
+    static char buf[3584];      /* httpd is single-threaded: safe, and off the stack */
     size_t n = dashboard_data_build_status_json(buf, sizeof(buf));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, (n < sizeof(buf)) ? (int)n : (int)sizeof(buf) - 1);
@@ -349,12 +349,15 @@ static esp_err_t h_api_wifi_save(httpd_req_t *req)
         return send_ok(req, false, "empty ssid");
     }
 
+    /* Save FIRST so the reply reports the real outcome. On success the
+     * manager schedules the restart ~2 s later, after this reply is out. */
+    if (!wifi_manager_save_credentials(ssid, pass)) {
+        return send_ok(req, false, "could not store credentials");
+    }
     httpd_resp_set_type(req, "application/json");
     (void)httpd_resp_send(req,
-        "{\"ok\":true,\"msg\":\"saved — rebooting into station mode\"}",
+        "{\"ok\":true,\"msg\":\"saved, rebooting into station mode\"}",
         HTTPD_RESP_USE_STRLEN);
-
-    wifi_manager_save_credentials(ssid, pass);   /* reboots */
     return ESP_OK;
 }
 
@@ -396,9 +399,22 @@ esp_err_t http_server_start(void)
     }
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.stack_size = 8192;
+    cfg.stack_size = 10240;
     cfg.max_uri_handlers = 24;   /* 17 routes + /ws (default 8 / old 16 silently dropped some) */
     cfg.server_port = 80;
+    /* A browser (plus phone captive-portal probes) keeps several keep-alive
+     * sockets open. With the default of 7 sockets and no purging, stale ones
+     * fill the table and new page loads / polls are refused -- the dashboard
+     * then looks "disconnected" until the ESP32 is rebooted. Purge the least
+     * recently used socket instead, and drop dead peers quickly. */
+    /* 13 + httpd's 3 internal fds = CONFIG_LWIP_MAX_SOCKETS (16). The old
+     * default of 7 was exhausted by one browser (6 parallel connections +
+     * the WebSocket), so the WebSocket kept being purged as "least recently
+     * used" and the page dropped every few seconds. */
+    cfg.max_open_sockets = 13;
+    cfg.lru_purge_enable = true;
+    cfg.recv_wait_timeout = 5;
+    cfg.send_wait_timeout = 5;
 
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {

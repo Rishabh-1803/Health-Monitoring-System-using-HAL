@@ -17,7 +17,7 @@
 
 static const char *TAG = "TASK_WIFI";
 
-#define WIFI_POLL_STACK   3072
+#define WIFI_POLL_STACK   4096
 #define WIFI_POLL_PRIO     3
 #define WIFI_POLL_MS     2000
 

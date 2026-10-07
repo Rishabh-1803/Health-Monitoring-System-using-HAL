@@ -1,18 +1,26 @@
 /**
  * @file    ina219.h
- * @brief   INA219 bidirectional current/voltage/power sensor (I2C).
+ * @brief   INA219 bidirectional current/voltage sensor (I2C) -- robust driver.
  *
- * Replaces the ACS712 analog path. The INA219 measures the voltage dropped
- * across an external shunt resistor and reports it as a signed 16-bit value
- * (10 uV LSB at PGA /1), plus the bus voltage (4 mV LSB, 0..26 V). Current
- * follows from Ohm's law: I = V_shunt / R_shunt.
+ * The INA219 measures the voltage across an external shunt (10 uV / LSB at
+ * every PGA setting) and the bus voltage (4 mV / LSB, 0..26 V). Current is
+ * Ohm's law: I = V_shunt / R_shunt, computed here in float so nothing is
+ * lost to integer truncation.
  *
- * Config defaults (bringup_config.h): address 0x40, shunt 0.1 ohm, PGA /1
- * (40 mV range -> +-2 A at 0.1 ohm), 12-bit continuous. Change SHUNT_OHM if
- * your board uses a different sense resistor; the math tracks it.
+ * What this driver guards against (all were real failure modes):
+ *   - range clipping   PGA /8 (+-320 mV) is used so a 0.1 ohm shunt reads up
+ *                      to 3.2 A. The old PGA /1 setting clipped at 0.4 A.
+ *   - wrong device     the config register is read back after writing, so a
+ *                      different chip that merely ACKs 0x40 is rejected.
+ *   - wrong address    the configured address is tried first, then
+ *                      0x40..0x4F (A0/A1 strapping variants).
+ *   - brown-out reset  ina219_service() re-checks the config register every
+ *                      call (~1 Hz) and rewrites it if the chip fell back
+ *                      to its power-on default.
+ *   - hot-plug / late  a missing device is re-probed by ina219_service(), so
+ *     power-up         plugging the sensor in after boot just works.
  *
- * All public reads are non-blocking (~1 ms at 250 kHz I2C) and safe to call
- * from the cooperative telemetry loop.
+ * Every read is ~0.3 ms on the bit-banged bus; safe in the cooperative loop.
  */
 #ifndef INA219_H
 #define INA219_H
@@ -28,28 +36,38 @@
 #define INA219_REG_CURRENT      0x04u
 #define INA219_REG_CALIB        0x05u
 
-/** Probe + configure the INA219. Returns true if the device ACKed. */
+/** Probe + reset + configure + verify. True only if a real INA219 answered. */
 bool ina219_init(void);
 
-/** True after a successful ina219_init(). */
+/** True while a verified INA219 is believed to be present and responding. */
 bool ina219_is_present(void);
 
 /**
- * Read the shunt voltage in millivolts (signed). Negative = current flowing
- * the "reverse" direction; the app rectifies it for a load-current display.
- * Returns false on I2C failure (out unchanged).
+ * Housekeeping, call about once per second from the main loop:
+ * re-probes when absent, re-programs the config register if the chip was
+ * reset, and gives up on a device that has stopped answering.
  */
+void ina219_service(void);
+
+/** Shunt voltage in units of 10 uV (signed). False on I2C failure. */
+bool ina219_read_shunt_raw(int32_t *raw_10uv);
+
+/** Legacy name kept for compatibility: same value as ina219_read_shunt_raw. */
 bool ina219_read_shunt_mv(int32_t *shunt_mv_x100);
 
-/**
- * Read the bus voltage in millivolts (0..26000). Returns false on failure.
- */
+/** Bus voltage in millivolts (0..26000). False on I2C failure. */
 bool ina219_read_bus_mv(uint32_t *bus_mv);
 
-/**
- * Convenience: shunt current in milliamps (signed), derived from the shunt
- * voltage and the configured R_shunt. Returns false on I2C failure.
- */
+/** Signed current in amps (float). False on I2C failure. */
+bool ina219_read_current_a(float *amps);
+
+/** Signed current in milliamps (rounded). False on I2C failure. */
 bool ina219_read_current_ma(int32_t *current_ma);
+
+/** True if the last shunt reading hit the PGA full-scale rail (clipped). */
+bool ina219_saturated(void);
+
+/** 7-bit address the device was found at (0 when absent). */
+uint8_t ina219_address(void);
 
 #endif /* INA219_H */

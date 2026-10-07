@@ -95,16 +95,17 @@ static int cmd_status(int argc, char **argv)
     if (s.ever_linked) {
         printf("  telemetry:   %lu ms old\n",
                (unsigned long)s.telemetry_age_ms);
-        printf("  temp/cur/vib: %.2f C / %.3f A / %.2f g (est.)\n",
+        printf("  temp/cur/vib: %.2f C / %.3f A / %.3f g (RMS)\n",
                (double)s.temp_c, (double)s.current_a, (double)s.vib_g);
     } else {
         printf("  telemetry:   never received\n");
     }
     printf("  alarms:      0x%02X (%s)\n",
            (unsigned)s.alarm_bits, alm_names(s.alarm_bits));
-    printf("  sensor:      %s\n",
-           (s.sensor_status & SENSOR_BIT_DS18B20_OK) ? "DS18B20 ok"
-                                                    : "DS18B20 FAIL");
+    printf("  sensors:     DS18B20 %s | MPU6050 %s | INA219 %s\n",
+           (s.sensor_status & SENSOR_BIT_DS18B20_OK) ? "ok" : "FAIL",
+           (s.sensor_status & SENSOR_BIT_MPU6050_OK) ? "ok" : "FAIL",
+           (s.sensor_status & SENSOR_BIT_INA219_OK)  ? "ok" : "FAIL");
     printf("  cpu/heap/up: %.1f%% / %lu B / %u s\n",
            (double)s.stm32_cpu_10000 / 100.0,
            (unsigned long)s.stm32_heap, (unsigned)s.stm32_uptime_s);

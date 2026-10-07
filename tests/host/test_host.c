@@ -11,6 +11,7 @@
  */
 
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -235,6 +236,17 @@ static void test_json_writer(void)
     CHECK(strcmp(buf,
         "{\"s\":\"a\\\"b\\\\c\\nd\",\"n\":24.50,\"i\":-1234567890123,"
         "\"b\":true}") == 0, "full writer output exact");
+
+    /* NaN / inf must never reach the browser: they are not valid JSON and
+     * one bad float would make the dashboard drop the whole status message. */
+    jsonw_init(&w, buf, sizeof(buf));
+    jsonw_num(&w, (double)NAN);
+    jsonw_raw(&w, ",");
+    jsonw_num(&w, (double)INFINITY);
+    CHECK(strcmp(buf, "0.00,0.00") == 0, "NaN/inf become 0.00");
+    jsonw_init(&w, buf, sizeof(buf));
+    jsonw_numf(&w, 0.0123456, 3);
+    CHECK(strcmp(buf, "0.012") == 0, "3-decimal number");
 
     /* Escaping of control characters. */
     jsonw_init(&w, buf, sizeof(buf));

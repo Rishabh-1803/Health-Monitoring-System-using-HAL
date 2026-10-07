@@ -35,6 +35,9 @@ void jsonw_str(jsonw_t *w, const char *s);
 /** Append a 2-decimal float ("24.50"). Safe with -Wformat for doubles. */
 void jsonw_num(jsonw_t *w, double v);
 
+/** Like jsonw_num with a chosen number of decimals; NaN/inf become 0. */
+void jsonw_numf(jsonw_t *w, double v, int decimals);
+
 /** Append an integer. */
 void jsonw_int(jsonw_t *w, long long v);
 

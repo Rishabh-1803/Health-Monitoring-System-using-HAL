@@ -45,7 +45,7 @@ static bool     s_comm_fail     = false;
 /* Config mirror. Defaults match the STM32 firmware — the values here
  * are what the dashboard shows until a RESP_STATUS or a local note
  * refreshes them. */
-static float    s_thr[3]        = { 60.0f, 4.0f, 0.5f };
+static float    s_thr[3]        = { 60.0f, 2.5f, 0.5f };   /* INA219 0.1 ohm reads up to 3.2 A */
 static uint16_t s_sample_ms     = 200u;
 
 /* ESP32-side facts. */
@@ -440,8 +440,8 @@ size_t dashboard_data_build_status_json(char *buf, size_t cap)
     jsonw_raw(&w, ",\"link\":"); jsonw_bool(&w, link);
     jsonw_raw(&w, ",\"age\":");  jsonw_int(&w, (long long)age);
     jsonw_raw(&w, ",\"temp\":"); jsonw_num(&w, temp);
-    jsonw_raw(&w, ",\"cur\":");  jsonw_num(&w, cur);
-    jsonw_raw(&w, ",\"vib\":");  jsonw_num(&w, vib);
+    jsonw_raw(&w, ",\"cur\":");  jsonw_numf(&w, cur, 3);   /* mA resolution */
+    jsonw_raw(&w, ",\"vib\":");  jsonw_numf(&w, vib, 3);
     jsonw_raw(&w, ",\"alm\":");  jsonw_int(&w, alm);
     jsonw_raw(&w, ",\"sstat\":");jsonw_int(&w, sst);
     jsonw_raw(&w, ",\"up\":");   jsonw_int(&w, (long long)up);

@@ -90,11 +90,14 @@
 #define I2C_SCL_PIN               GPIO_PIN_6
 #define I2C_SDA_PORT              GPIOB
 #define I2C_SDA_PIN               GPIO_PIN_7
-/* 2 us half-bit ~= 250 kHz. SSD1306/INA219/MPU6050 all support 400 kHz,
- * so 250 kHz is within spec and lets the 10 ms telemetry tick flush one
- * OLED page without overflowing the 256-byte UART RX ring (which fills
- * in ~5.6 ms at 460800 baud). Raise to 5 for ~100 kHz.                 */
-#define I2C_HALF_BIT_US           2u
+/* 3 us half-bit -> roughly 130-150 kHz including GPIO overhead. All three
+ * devices (SSD1306 / INA219 / MPU6050) are rated for 400 kHz, but this bus
+ * is bit-banged, often on jumper wires with only the breakout boards'
+ * pull-ups, and a slow/marginal edge shows up as random NACKs. 3 us leaves
+ * comfortable rise-time margin and still fits a one-page OLED flush in the
+ * loop. Raise to 5 for ~100 kHz on long wires, drop to 2 only on a short,
+ * well pulled-up bus.                                                  */
+#define I2C_HALF_BIT_US           3u
 #define I2C_TIMEOUT_US            2000u    /* clock-stretch / stuck-line guard */
 
 /* SSD1306 OLED. 0x3C is by far the most common; some modules are 0x3D. */
@@ -111,12 +114,38 @@
  *  run the I2C scan (menu 2) and set the address it finds.
  *
  *  Shunt: nearly all INA219 breakouts ship a 0.1 ohm (R100) sense
- *  resistor -> ~10 mA resolution at PGA /1 (40 mV range). A 0.01
- *  ohm board (R010) is for higher current; the math still works
- *  because current = V_shunt / R_shunt.
+ *  resistor -> 0.1 mA resolution and +-3.2 A range at PGA /8. A 0.01
+ *  ohm board (R010) reads up to 32 A: set INA219_SHUNT_OHM_X10000 to
+ *  100. The maths is current = V_shunt / R_shunt either way.
+ *
+ *  DC ONLY: the INA219 is not isolated and tops out at 26 V on the
+ *  bus pin. Never put it in series with mains.
  * ------------------------------------------------------------------ */
 #define INA219_I2C_ADDR_7BIT      0x40u
 #define INA219_SHUNT_OHM_X10000   1000u   /* 0.1 ohm = 1000 * 0.0001 ohm   */
+
+/* PGA gain: 0 = /1 (+-40 mV)  1 = /2 (+-80 mV)  2 = /4 (+-160 mV)
+ *           3 = /8 (+-320 mV, the chip's power-on default).
+ * IMPORTANT: full-scale current = range / R_shunt. At 0.1 ohm, /1 only
+ * reaches +-0.4 A and silently clips everything above it (the old setting
+ * -- the "current stuck at 0.4 A" bug). /8 reaches +-3.2 A, which is the
+ * rating of the standard 0.1 ohm breakout. */
+#define INA219_PGA_SETTING        3u
+
+/* Full-scale current the chosen PGA + shunt can measure, in mA:
+ *   range_mV / R  with range_mV = 40 << PGA                             */
+#define INA219_FULL_SCALE_MA      ((uint32_t)(((40u << INA219_PGA_SETTING) * 10000u) \
+                                              / INA219_SHUNT_OHM_X10000))
+
+/* Readings below this are INA219 offset/noise, not load: shown as 0 A. */
+#define INA219_DEADBAND_MA        5u
+
+/* ------------------------------------------------------------------ *
+ *  Alarm defaults that depend on what the sensors can physically read.
+ *  The overcurrent default must sit BELOW INA219_FULL_SCALE_MA, or the
+ *  alarm could never fire (a 4 A threshold on a 3.2 A-range sensor).
+ * ------------------------------------------------------------------ */
+#define DEFAULT_THRESH_CURRENT_A  2.5f
 
 /* ------------------------------------------------------------------ *
  *  MPU6050 6-axis accel/gyro (I2C) used as the vibration source.
@@ -124,8 +153,11 @@
  *  to +-2 g full scale -> 16384 LSB per g (0.061 mg/LSB). Vibration
  *  is the high-passed total acceleration magnitude in g.
  * ------------------------------------------------------------------ */
-#define MPU6050_I2C_ADDR_7BIT     0x68u
-#define MPU6050_ACCEL_RANGE       0u      /* 0=+-2g 1=+-4g 2=+-8g 3=+-16g */
+#define MPU6050_I2C_ADDR_7BIT     0x68u   /* 0x69 is tried automatically too */
+/* +-8 g: a machine that is genuinely vibrating easily peaks past +-2 g, and
+ * a clipped accelerometer under-reports exactly when it matters most.
+ * 4096 LSB/g still resolves 0.24 mg, far below the 0.5 g alarm level.   */
+#define MPU6050_ACCEL_RANGE       2u      /* 0=+-2g 1=+-4g 2=+-8g 3=+-16g */
 
 
 /* ------------------------------------------------------------------ *

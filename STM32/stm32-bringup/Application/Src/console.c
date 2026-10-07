@@ -147,12 +147,20 @@ bool console_is_ready(void)
     return usb_ready();
 }
 
+/** True when a print would go out immediately (host attached AND draining). */
+bool console_can_print_now(void);
+
 /** True once the stack has finished with the previous packet. */
 static bool tx_idle(void)
 {
     const USBD_CDC_HandleTypeDef *hcdc =
         (const USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassData;
     return (hcdc != NULL) && (hcdc->TxState == 0u);
+}
+
+bool console_can_print_now(void)
+{
+    return usb_ready() && tx_idle();
 }
 
 /**

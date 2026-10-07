@@ -174,6 +174,17 @@ esp_err_t websocket_server_ws_handler(httpd_req_t *req)
         }
     }
 
+    /* The handler is called once for the HTTP upgrade (GET) AFTER httpd has
+     * already sent the 101 handshake reply. There is no frame to read yet:
+     * calling httpd_ws_recv_frame() here would block the single httpd thread
+     * for the whole receive timeout (5 s) -- freezing every other request --
+     * and then fail, which closes the brand-new socket. That was the
+     * "connects, then drops, page never updates" loop. Return immediately,
+     * exactly as the ESP-IDF websocket example does. */
+    if (req->method == HTTP_GET) {
+        return ESP_OK;
+    }
+
     httpd_ws_frame_t frame;
     memset(&frame, 0, sizeof(frame));
     uint8_t buf[128];

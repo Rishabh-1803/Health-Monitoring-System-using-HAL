@@ -25,7 +25,7 @@
 
 static const char *TAG = "UART_TX";
 
-#define TX_STACK_SIZE   2048
+#define TX_STACK_SIZE   4096   /* ESP_LOGE/logger_logf on comm-fail need >2 KB */
 #define TX_PRIORITY      4
 #define HB_PERIOD_MS     1000
 #define COMM_FAIL_MS     5000

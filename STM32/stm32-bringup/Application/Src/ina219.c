@@ -1,26 +1,19 @@
 /**
  * @file    ina219.c
- * @brief   INA219 I2C current/voltage sensor driver.
+ * @brief   INA219 I2C current/voltage sensor driver (see ina219.h).
  *
- * The INA219 is a delta-sigma ADC behind an I2C register file. We configure
- * it for the simplest useful mode:
- *   - PGA range  /1  -> 40 mV full scale, 10 uV / LSB on the shunt voltage
- *   - BUS_ADC    12-bit, single shot (512 us) -- the app polls, so no need
- *                for continuous conversion and its power cost
- *   - SHUNT_ADC  12-bit, single shot
- *   - Mode       shunt-and-bus, triggered once per read
+ * Configuration register (SBOS448, reg 0x00), built from named fields:
+ *   bit 15     RST   0
+ *   bit 13     BRNG  1      32 V bus range (12/24 V rails do not overflow)
+ *   bits 12:11 PG    PGA    gain, from INA219_PGA_SETTING (3 = /8, +-320 mV)
+ *   bits 10:7  BADC  0011   bus ADC, 12-bit, 1 sample (532 us)
+ *   bits 6:3   SADC  1011   shunt ADC, 12-bit, 8-sample hardware average
+ *                           (4.26 ms) -- this is the noise filter
+ *   bits 2:0   MODE  111    shunt + bus, continuous
  *
- * Current is computed in the MCU from V_shunt / R_shunt rather than using
- * the chip's internal CALIBRATION register + CURRENT register. That avoids
- * the rounding/scale bookkeeping and keeps the math transparent; the
- * trade-off (losing the chip's power register) is irrelevant here.
- *
- * LSB maths:
- *   shunt_voltage_raw is a signed 15-bit value (bit 0..14) in units of
- *   10 uV (PGA /1). So shunt_mv = raw * 10 uV = raw * 0.01 mV, i.e. the
- *   value in hundredths of a millivolt IS the raw count.
- *   bus_voltage_raw: bits 3..15 of the 16-bit word, 4 mV / LSB, with a
- *   conversion-ready bit at bit 1 and an overflow bit at bit 0.
+ * With PGA /8 and BRNG=1 this differs from the chip's power-on value
+ * (0x399F) only in the SADC averaging field, which is exactly what lets
+ * ina219_service() tell "chip was reset" from "chip is still configured".
  */
 #include "bringup_config.h"
 #include "ina219.h"
@@ -29,32 +22,31 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define INA219_ADDR         (INA219_I2C_ADDR_7BIT)
+#define CFG_BRNG_32V        (1u << 13)
+#define CFG_PGA(g)          ((uint16_t)(((uint16_t)(g) & 0x3u) << 11))
+#define CFG_BADC_12BIT      (0x3u << 7)
+#define CFG_SADC_12BIT_X8   (0xBu << 3)
+#define CFG_MODE_CONT       0x7u
 
-/* Config word (INA219 datasheet SBOS448C, config register 0x00):
- *   bit 15  RST  = 0
- *   bit 14  -    = 0  (reserved)
- *   bit 13  BRNG = 1  (32 V bus FSR so 12/24 V rails do not overflow)
- *   bits 12:11 PG  = 00 (PGA /1, +-40 mV shunt FSR, 10 uV LSB)
- *   bits 10:7  BADC  = 0011 (12-bit, 532 us conversion)
- *   bits 6:3   SADC  = 0011 (12-bit, 532 us conversion)
- *   bits 2:0   MODE  = 111  (shunt + bus, CONTINUOUS)
- *
- * Continuous mode keeps the ADC free-running so a register read always
- * returns the latest completed conversion; the first read after init may
- * be stale (the very first conversion finishes ~0.5 ms after the config
- * write), which is fine for a fire-and-forget telemetry stream.
- *
- *   0x2000 | (0x03<<7) | (0x03<<3) | 0x07 = 0x219F
- */
-#define INA219_CONFIG_VAL   0x219Fu
+#define INA219_CONFIG_VAL   ((uint16_t)(CFG_BRNG_32V | CFG_PGA(INA219_PGA_SETTING) | \
+                                        CFG_BADC_12BIT | CFG_SADC_12BIT_X8 |         \
+                                        CFG_MODE_CONT))
+#define INA219_RESET_BIT    0x8000u
 
-static bool s_present = false;
+/* Shunt register saturates at the PGA full scale: 40 mV << PGA, in 10 uV. */
+#define SHUNT_FULL_SCALE_COUNTS   ((int32_t)(4000 << INA219_PGA_SETTING))
 
-static bool read_reg16(uint8_t reg, uint16_t *out)
+#define MAX_CONSEC_FAILS    10u
+
+static bool     s_present      = false;
+static uint8_t  s_addr         = 0u;
+static uint32_t s_fail_streak  = 0u;
+static bool     s_saturated    = false;
+
+static bool read_reg16_at(uint8_t addr, uint8_t reg, uint16_t *out)
 {
     uint8_t buf[2];
-    if (!bsp_i2c_read_reg(INA219_ADDR, reg, buf, 2u)) {
+    if (!bsp_i2c_read_reg(addr, reg, buf, 2u)) {
         return false;
     }
     /* INA219 is big-endian on the wire. */
@@ -62,80 +54,156 @@ static bool read_reg16(uint8_t reg, uint16_t *out)
     return true;
 }
 
-static bool write_reg16(uint8_t reg, uint16_t val)
+static bool write_reg16_at(uint8_t addr, uint8_t reg, uint16_t val)
 {
     uint8_t buf[3] = { reg, (uint8_t)(val >> 8), (uint8_t)(val & 0xFFu) };
-    return bsp_i2c_write(INA219_ADDR, buf, 3u);
+    return bsp_i2c_write(addr, buf, 3u);
+}
+
+#define INA219_POR_CONFIG   0x399Fu     /* power-on default of the config reg */
+
+/* Reset, program and VERIFY one candidate address. `strict` is used for
+ * addresses we were NOT told about: we only touch such a device if its
+ * config register already looks like an INA219's, so scanning can never
+ * scribble on some unrelated chip that happens to live at 0x4x. */
+static bool try_address(uint8_t addr, bool strict)
+{
+    if (!bsp_i2c_probe(addr)) {
+        return false;
+    }
+    if (strict) {
+        uint16_t cur = 0u;
+        if (!read_reg16_at(addr, INA219_REG_CONFIG, &cur) ||
+            ((cur & 0x7FFFu) != INA219_POR_CONFIG &&
+             (cur & 0x7FFFu) != (INA219_CONFIG_VAL & 0x7FFFu))) {
+            return false;
+        }
+    }
+    (void)write_reg16_at(addr, INA219_REG_CONFIG, INA219_RESET_BIT);
+    bsp_delay_us(1000u);
+    if (!write_reg16_at(addr, INA219_REG_CONFIG, INA219_CONFIG_VAL)) {
+        return false;
+    }
+    uint16_t rb = 0u;
+    if (!read_reg16_at(addr, INA219_REG_CONFIG, &rb)) {
+        return false;
+    }
+    /* Bit 15 (RST) self-clears; compare everything else. A chip that is
+     * not an INA219 will not echo our config word back. */
+    return (rb & 0x7FFFu) == (INA219_CONFIG_VAL & 0x7FFFu);
 }
 
 bool ina219_init(void)
 {
-    /* A probe is enough: if the address ACKs, an INA219 (or a clone) is
-     * there. Writing a known config then reading it back would be stronger,
-     * but the shared bus + the telemetry loop's tolerance for a missing
-     * sensor make a probe the right cost. */
-    if (!bsp_i2c_probe(INA219_ADDR)) {
-        s_present = false;
-        return false;
+    s_present     = false;
+    s_fail_streak = 0u;
+
+    /* Configured address first, then the rest of the strap range. */
+    if (try_address((uint8_t)INA219_I2C_ADDR_7BIT, false)) {
+        s_addr = (uint8_t)INA219_I2C_ADDR_7BIT;
+        s_present = true;
+        return true;
     }
-    if (!write_reg16(INA219_REG_CONFIG, INA219_CONFIG_VAL)) {
-        s_present = false;
-        return false;
+    for (uint8_t a = 0x40u; a <= 0x4Fu; a++) {
+        if (a == (uint8_t)INA219_I2C_ADDR_7BIT) { continue; }
+        if (try_address(a, true)) {
+            s_addr = a;
+            s_present = true;
+            return true;
+        }
     }
-    s_present = true;
-    return true;
+    s_addr = 0u;
+    return false;
 }
 
 bool ina219_is_present(void) { return s_present; }
+uint8_t ina219_address(void) { return s_addr; }
+bool ina219_saturated(void)  { return s_saturated; }
 
-bool ina219_read_shunt_mv(int32_t *shunt_mv_x100)
+void ina219_service(void)
+{
+    if (!s_present) {
+        (void)ina219_init();            /* hot-plug / late power-up        */
+        return;
+    }
+
+    uint16_t cfg = 0u;
+    if (!read_reg16_at(s_addr, INA219_REG_CONFIG, &cfg)) {
+        if (++s_fail_streak >= 3u) {
+            s_present = false;          /* stopped answering: re-probe     */
+        }
+        return;
+    }
+    s_fail_streak = 0u;
+    if ((cfg & 0x7FFFu) != (INA219_CONFIG_VAL & 0x7FFFu)) {
+        /* Brown-out / glitch reset it to the power-on default. */
+        (void)write_reg16_at(s_addr, INA219_REG_CONFIG, INA219_CONFIG_VAL);
+    }
+}
+
+/* Count a failed data read; drop presence after a sustained run so
+ * ina219_service() starts re-probing. */
+static void note_fail(void)
+{
+    if (++s_fail_streak >= MAX_CONSEC_FAILS) {
+        s_present = false;
+    }
+}
+
+bool ina219_read_shunt_raw(int32_t *raw_10uv)
 {
     if (!s_present) { return false; }
     uint16_t raw;
-    if (!read_reg16(INA219_REG_SHUNT_V, &raw)) {
+    if (!read_reg16_at(s_addr, INA219_REG_SHUNT_V, &raw)) {
+        note_fail();
         return false;
     }
-    /* The shunt register is a signed 16-bit two's-complement value whose LSB
-     * is 10 uV (PGA /1) regardless of the gain setting (gain only changes the
-     * full-scale range, not the LSB). So the count IS the voltage in units of
-     * 0.01 mV, sign-extended. */
-    int16_t signed_raw = (int16_t)raw;
-    *shunt_mv_x100 = (int32_t)signed_raw;       /* hundredths of a millivolt */
+    s_fail_streak = 0u;
+
+    /* Signed two's complement; LSB is 10 uV at every PGA setting. */
+    int32_t v = (int32_t)(int16_t)raw;
+    s_saturated = (v >= SHUNT_FULL_SCALE_COUNTS) || (v <= -SHUNT_FULL_SCALE_COUNTS);
+    *raw_10uv = v;
     return true;
+}
+
+bool ina219_read_shunt_mv(int32_t *shunt_mv_x100)
+{
+    return ina219_read_shunt_raw(shunt_mv_x100);
 }
 
 bool ina219_read_bus_mv(uint32_t *bus_mv)
 {
     if (!s_present) { return false; }
     uint16_t raw;
-    if (!read_reg16(INA219_REG_BUS_V, &raw)) {
+    if (!read_reg16_at(s_addr, INA219_REG_BUS_V, &raw)) {
+        note_fail();
         return false;
     }
-    /* Bits 3..15 hold the bus voltage, 4 mV / LSB. Bit 1 = CNVR (ready),
-     * bit 0 = OVF. Shift right 3 to get the count. */
-    uint32_t counts = (uint32_t)(raw >> 3);
-    *bus_mv = counts * 4u;
+    /* Bits 15:3 = voltage in 4 mV steps; bit 1 = CNVR, bit 0 = OVF. */
+    *bus_mv = (uint32_t)(raw >> 3) * 4u;
+    return true;
+}
+
+bool ina219_read_current_a(float *amps)
+{
+    int32_t raw;
+    if (!ina219_read_shunt_raw(&raw)) {
+        return false;
+    }
+    /* I = V/R:  V = raw * 10 uV,  R = R_x10000 * 0.0001 ohm
+     *   -> I[A] = raw * 1e-5 / (R_x10000 * 1e-4) = raw / (R_x10000 * 10) */
+    *amps = (float)raw / ((float)INA219_SHUNT_OHM_X10000 * 10.0f);
     return true;
 }
 
 bool ina219_read_current_ma(int32_t *current_ma)
 {
-    int32_t shunt_mv_x100;
-    if (!ina219_read_shunt_mv(&shunt_mv_x100)) {
+    float a;
+    if (!ina219_read_current_a(&a)) {
         return false;
     }
-    /* current = V_shunt / R_shunt.
-     * shunt_mv_x100 is in units of 0.01 mV = 1e-5 V.
-     * R_shunt = INA219_SHUNT_OHM_X10000 * 1e-4 ohm.
-     * I (A) = (shunt_mv_x100 * 1e-5) / (R_x10000 * 1e-4)
-     *       = (shunt_mv_x100) / (R_x10000 * 10)
-     * I (mA) = I(A) * 1000 = shunt_mv_x100 * 100 / R_x10000
-     * Integer form keeps full precision:
-     *   current_ma = (shunt_mv_x100 * 100) / R_x10000
-     * Range at 0.1 ohm, 40 mV FSR: +-400 mA -> +-4000 (0.01 mA) ... but we
-     * want mA, so this gives e.g. 0.42 A -> 420 mA. Good. */
-    int32_t r = (int32_t)INA219_SHUNT_OHM_X10000;
-    if (r == 0) { r = 1; }
-    *current_ma = (shunt_mv_x100 * 100) / r;
+    float ma = a * 1000.0f;
+    *current_ma = (int32_t)(ma >= 0.0f ? ma + 0.5f : ma - 0.5f);
     return true;
 }

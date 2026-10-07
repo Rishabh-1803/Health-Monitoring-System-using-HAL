@@ -162,3 +162,14 @@ button.on { background: var(--warn); color: #171307; border-color: var(--warn); 
   .controls { gap: 14px; }
   .btn-grid { grid-template-columns: 1fr; }
 }
+
+/* sensor health tags (DS18B20 / MPU6050 / INA219) */
+.sens { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px;
+        font-size: 10px; font-weight: 600; letter-spacing: .04em; border: 1px solid var(--muted); color: var(--muted); }
+.sens.ok   { color: #3fb950; border-color: #3fb950; }
+.sens.bad  { color: #f85149; border-color: #f85149; animation: sensblink 1s steps(2) infinite; }
+.sens.idle { opacity: .6; }
+@keyframes sensblink { 50% { opacity: .45; } }
+
+/* dashboard <-> ESP32 connection lost */
+.conn-banner { background: #5a3a00; color: #ffd27a; border-color: #b27a00; }

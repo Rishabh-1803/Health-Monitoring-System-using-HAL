@@ -20,6 +20,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -44,7 +45,7 @@ static const char *TAG = "WIFI_MGR";
 #define PROV_AP_IP          "192.168.4.1"
 
 /* DNS hijack: answer every A query with the AP address. */
-#define DNS_TASK_STACK      3072
+#define DNS_TASK_STACK      4096
 #define DNS_PORT            53
 #define DNS_MAX_PACKET      512
 
@@ -55,6 +56,8 @@ static char s_ssid[33] = "";
 static SemaphoreHandle_t s_lock;
 
 static int s_sta_retries = 0;
+static esp_netif_t *s_sta_netif;
+static bool s_ap_fallback = false;     /* AP running beside a failing STA */
 static bool s_dns_running = false;
 
 /* ================================================================== */
@@ -139,6 +142,26 @@ static bool read_credentials(char *ssid, size_t ssid_cap,
     return ok;
 }
 
+/* Restart from a throw-away task, a moment after the caller returns, so the
+ * HTTP reply that triggered it has time to reach the browser (a restart
+ * straight after httpd_resp_send often resets the connection before the
+ * client has read the answer -> "Failed to fetch"). */
+static void restart_task(void *arg)
+{
+    uint32_t ms = (uint32_t)(uintptr_t)arg;
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    esp_restart();
+}
+
+static void restart_later(uint32_t ms)
+{
+    if (xTaskCreate(restart_task, "restart", 2048, (void *)(uintptr_t)ms,
+                    tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+        vTaskDelay(pdMS_TO_TICKS(ms));
+        esp_restart();
+    }
+}
+
 bool wifi_manager_save_credentials(const char *ssid, const char *pass)
 {
     if (ssid == NULL || pass == NULL || ssid[0] == '\0') {
@@ -154,8 +177,7 @@ bool wifi_manager_save_credentials(const char *ssid, const char *pass)
     nvs_close(h);
     if (ok) {
         ESP_LOGI(TAG, "credentials saved — rebooting into station mode");
-        vTaskDelay(pdMS_TO_TICKS(150));   /* let the HTTP reply escape */
-        esp_restart();
+        restart_later(2000u);             /* after the HTTP reply escapes */
     }
     return ok;
 }
@@ -221,35 +243,41 @@ static void dns_task(void *arg)
         if (n < 12) {
             continue;              /* timeout or garbage — try again     */
         }
-        /* Answer: copy header, set QR/AA, one answer = AP IP. */
-        uint8_t *r = pkt + n;      /* build the reply in the tail        */
-        r[0] = pkt[0]; r[1] = pkt[1];
-        r[2] = 0x85; r[3] = 0x80;            /* QR=1, AA=1, RCODE=0      */
-        r[4] = pkt[4]; r[5] = pkt[5];        /* QDCOUNT (echoed)         */
-        r[6] = 0x00; r[7] = 0x01;            /* ANCOUNT = 1              */
-        r[8] = 0x00; r[9] = 0x00;
-        r[10] = 0x00; r[11] = 0x00;
-
-        /* The reply needs the question section copied after the header;
-         * we move the question to sit right after our new header. */
-        uint8_t reply[DNS_MAX_PACKET];
-        memcpy(reply, r, 12);
-        memcpy(reply + 12, pkt + 12, (size_t)(n - 12));
-        size_t qlen = (size_t)(n - 12);
-        size_t off = 12 + qlen;
-        if (off + 16 <= sizeof(reply)) {
-            /* Type A, class IN, ttl 60, rdlen 4, rdata = AP IP. */
-            static const uint8_t tail[16] = {
-                0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C,
-                0x00, 0x04, 192, 168, 4, 1, 0x00, 0x00
-            };
-            /* tail[14] = A record rdlength trick: we only need the first
-             * 14 bytes (ends with the 4 address bytes). */
-            memcpy(reply + off, tail, 14);
-            off += 14;
-            (void)sendto(sock, reply, off, 0,
-                         (struct sockaddr *)&src, slen);
+        /* Walk the QNAME of the FIRST question to find where it ends. */
+        int q = 12;
+        while (q < n && pkt[q] != 0) {
+            q += pkt[q] + 1;
         }
+        q += 1 + 4;                       /* root label + QTYPE + QCLASS */
+        if (q > n) {
+            continue;                     /* malformed query            */
+        }
+        uint16_t qtype = (uint16_t)((pkt[q - 4] << 8) | pkt[q - 3]);
+
+        uint8_t reply[DNS_MAX_PACKET];
+        if ((size_t)q + 16 > sizeof(reply)) {
+            continue;
+        }
+        memcpy(reply, pkt, (size_t)q);    /* header + question only     */
+        reply[2] = 0x85; reply[3] = 0x80; /* QR=1, AA=1, RD/RA, NOERROR */
+        reply[4] = 0x00; reply[5] = 0x01; /* exactly one question       */
+        reply[8] = reply[9] = reply[10] = reply[11] = 0x00; /* no NS/AR */
+        size_t off = (size_t)q;
+        if (qtype == 1u) {                /* A record: answer with AP IP */
+            reply[6] = 0x00; reply[7] = 0x01;
+            static const uint8_t ans[16] = {
+                0xC0, 0x0C,               /* name = pointer to question */
+                0x00, 0x01, 0x00, 0x01,   /* TYPE A, CLASS IN           */
+                0x00, 0x00, 0x00, 0x3C,   /* TTL 60 s                   */
+                0x00, 0x04,               /* RDLENGTH 4                 */
+                192, 168, 4, 1
+            };
+            memcpy(reply + off, ans, sizeof(ans));
+            off += sizeof(ans);
+        } else {                          /* AAAA etc: empty NOERROR    */
+            reply[6] = 0x00; reply[7] = 0x00;
+        }
+        (void)sendto(sock, reply, off, 0, (struct sockaddr *)&src, slen);
     }
 
     close(sock);
@@ -272,6 +300,59 @@ static void dns_start(void)
 /*  Event handlers                                                    */
 /* ================================================================== */
 
+/* Reconnect from a one-shot timer. The old code slept (up to 10 s) INSIDE the
+ * system event handler, which stalls the whole default event loop: IP and
+ * WiFi events queued behind it, so recovery looked "stuck". */
+static esp_timer_handle_t s_reconnect_timer;
+static bool s_ever_got_ip = false;       /* connected at least once this boot */
+
+static void reconnect_cb(void *arg)
+{
+    (void)arg;
+    esp_wifi_connect();
+}
+
+static void schedule_reconnect(uint32_t delay_s)
+{
+    if (s_reconnect_timer == NULL) {
+        const esp_timer_create_args_t a = {
+            .callback = reconnect_cb, .name = "wifi_reconn",
+        };
+        if (esp_timer_create(&a, &s_reconnect_timer) != ESP_OK) {
+            esp_wifi_connect();          /* no timer: retry immediately */
+            return;
+        }
+    }
+    (void)esp_timer_stop(s_reconnect_timer);
+    (void)esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_s * 1000000ull);
+}
+
+static void start_fallback_ap(void)
+{
+    esp_netif_create_default_wifi_ap();
+    wifi_config_t wc = { 0 };
+    strncpy((char *)wc.ap.ssid, PROV_SSID, sizeof(wc.ap.ssid) - 1u);
+    strncpy((char *)wc.ap.password, PROV_PASS, sizeof(wc.ap.password) - 1u);
+    wc.ap.ssid_len = (uint8_t)strlen(PROV_SSID);
+    wc.ap.channel = PROV_CHANNEL;
+    wc.ap.max_connection = PROV_MAX_CONN;
+    wc.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    if (esp_wifi_set_mode(WIFI_MODE_APSTA) != ESP_OK
+        || esp_wifi_set_config(WIFI_IF_AP, &wc) != ESP_OK) {
+        ESP_LOGE(TAG, "could not open fallback AP");
+        return;
+    }
+    s_ap_fallback = true;
+    if (s_lock != NULL) { xSemaphoreTake(s_lock, portMAX_DELAY); }
+    snprintf(s_ip, sizeof(s_ip), "%s", PROV_AP_IP);
+    if (s_lock != NULL) { xSemaphoreGive(s_lock); }
+    dns_start();
+    set_state(WIFI_MGR_PROVISIONING);
+    dashboard_data_note_wifi(DASH_WIFI_PROVISIONING, PROV_SSID, PROV_AP_IP, 0);
+    ESP_LOGW(TAG, "Setup AP \"%s\" (pw \"%s\") open — http://%s/",
+             PROV_SSID, PROV_PASS, PROV_AP_IP);
+}
+
 static void event_handler(void *arg, esp_event_base_t base, int32_t id,
                           void *event_data)
 {
@@ -282,29 +363,36 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id,
         esp_wifi_connect();
     }
     else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *d =
+            (const wifi_event_sta_disconnected_t *)event_data;
         s_sta_retries++;
-        if (s_sta_retries <= STA_MAX_RETRIES) {
-            /* Backoff: 1s, 2s, ... capped at 10s. */
-            uint32_t delay_s = (uint32_t)s_sta_retries;
-            if (delay_s > 10u) {
-                delay_s = 10u;
-            }
-            ESP_LOGW(TAG, "STA disconnected — retry %d/%d in %lu s",
-                     s_sta_retries, STA_MAX_RETRIES,
-                     (unsigned long)delay_s);
-            vTaskDelay(pdMS_TO_TICKS(delay_s * 1000u));
-            esp_wifi_connect();
-        } else {
-            ESP_LOGE(TAG, "STA gave up after %d retries — starting "
-                     "provisioning AP", STA_MAX_RETRIES);
+        ESP_LOGW(TAG, "STA disconnected, reason %d (%s) — attempt %d",
+                 d ? (int)d->reason : -1,
+                 (d && (d->reason == WIFI_REASON_AUTH_FAIL
+                        || d->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT
+                        || d->reason == WIFI_REASON_HANDSHAKE_TIMEOUT))
+                     ? "wrong password?" :
+                 (d && d->reason == WIFI_REASON_NO_AP_FOUND)
+                     ? "SSID not found / 5 GHz only?" : "see esp_wifi docs",
+                 s_sta_retries);
+
+        if (!s_ever_got_ip && !s_ap_fallback
+            && s_sta_retries > STA_MAX_RETRIES) {
+            /* Credentials never worked this boot. Do NOT erase them (a
+             * typo or a router that is merely off would wipe good
+             * settings and loop forever). Open the setup AP *beside* the
+             * station so the user can correct them from the dashboard. */
             logger_logf(LOG_LVL_ERR, "wifi",
-                        "STA failed %d times — provisioning AP",
+                        "STA failed %d times — setup AP opened",
                         STA_MAX_RETRIES);
-            /* Reboot into provisioning mode: the cleanest mode switch,
-             * because netif/wifi re-init on the AP side is exactly the
-             * same path as a fresh boot without credentials. */
-            (void)wifi_manager_clear_credentials();   /* reboots */
+            start_fallback_ap();
         }
+        /* Keep trying forever; back off 1..10 s. */
+        uint32_t delay_s = (uint32_t)s_sta_retries;
+        if (delay_s > 10u) {
+            delay_s = 10u;
+        }
+        schedule_reconnect(delay_s);
     }
     else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)event_data;
@@ -316,6 +404,12 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id,
             xSemaphoreGive(s_lock);
         }
         s_sta_retries = 0;
+        s_ever_got_ip = true;
+        if (s_ap_fallback) {
+            s_ap_fallback = false;
+            s_dns_running = false;          /* dns task exits by itself */
+            (void)esp_wifi_set_mode(WIFI_MODE_STA);
+        }
         set_state(WIFI_MGR_CONNECTED);
         ESP_LOGI(TAG, "got IP %s", s_ip);
         logger_logf(LOG_LVL_INFO, "wifi", "connected, ip %s", s_ip);
@@ -337,7 +431,10 @@ static void start_station(const char *ssid, const char *pass)
     strncpy(s_ssid, ssid, sizeof(s_ssid) - 1u);
     s_ssid[sizeof(s_ssid) - 1u] = '\0';
 
-    esp_netif_create_default_wifi_sta();
+    s_sta_netif = esp_netif_create_default_wifi_sta();
+    if (s_sta_netif != NULL) {
+        (void)esp_netif_set_hostname(s_sta_netif, "health-monitor");
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -350,11 +447,24 @@ static void start_station(const char *ssid, const char *pass)
     wifi_config_t wc = { 0 };
     strncpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid) - 1u);
     strncpy((char *)wc.sta.password, pass, sizeof(wc.sta.password) - 1u);
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+    /* Accept whatever the router offers (open, WPA2, WPA3 transition).
+     * The old WPA_WPA2 threshold silently rejected open and WPA3-only
+     * networks, and the first-match scan could lock onto a weak AP. */
+    wc.sta.threshold.authmode = (pass[0] == '\0') ? WIFI_AUTH_OPEN
+                                                   : WIFI_AUTH_WPA2_PSK;
+    wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wc.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    wc.sta.pmf_cfg.capable = true;
+    wc.sta.pmf_cfg.required = false;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Modem power-save makes the radio sleep between beacons: WebSocket
+     * pushes and HTTP polls then arrive late or time out, which shows up as
+     * a dashboard that "disconnects" at random. This is a mains/bench
+     * instrument, so keep the radio awake. */
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
 
     set_state(WIFI_MGR_CONNECTING);
     dashboard_data_note_wifi(DASH_WIFI_CONNECTING, s_ssid, "", 0);

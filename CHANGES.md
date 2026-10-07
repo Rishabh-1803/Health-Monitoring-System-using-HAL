@@ -195,3 +195,141 @@ key within 3 s to enter the menu, run test `2` (I2C scan). You should see
 three devices: the OLED (`0x3C`), the INA219 (`0x40`) and the MPU6050
 (`0x68`). If any is missing or at a different address, correct the
 `#define` above.
+
+
+---
+
+# Fix pass 2 — INA219 current + MPU6050 vibration errors
+
+## Root causes found
+
+| # | Where | Bug | Effect |
+|---|-------|-----|--------|
+| 1 | `ina219.c` | PGA set to /1 (+-40 mV) | with the usual 0.1 ohm shunt the reading **clipped at 0.4 A**; real load of 2 A showed 0.4 A, overcurrent alarm unreachable |
+| 2 | `ina219.c` | integer maths `raw*100/R` | truncated to whole mA |
+| 3 | `ina219.c` | probe only, no read-back, fixed address | a wrong/clone chip, or A0/A1 strapped to another address, looked "present" or was never found |
+| 4 | both drivers | init ran **once** at boot | sensor powered late, loose jumper at boot, or a relay-click brown-out reset => reads failed **forever** |
+| 5 | `mpu6050.c` | WHO_AM_I had to be exactly 0x68 | many GY-521 clones / MPU6500 parts answer 0x70/0x71/0x98 => "sensor missing" |
+| 6 | `mpu6050.c` | address fixed at 0x68 | AD0 strapped high (0x69) never worked |
+| 7 | `mpu6050.c` | no device reset, no verification | chip left in SLEEP/old config returned zeros |
+| 8 | `mpu6050.c` | all-0x00/0xFF reads accepted | a glitch became a fake ~1 g vibration spike => false alarm |
+| 9 | `app_telemetry.c` | vibration = |magnitude - baseline| | sideways shaking (perpendicular to gravity) barely changes the magnitude and was almost invisible |
+| 10 | `app_telemetry.c` | +-2 g range | real machine vibration clips the sensor and under-reports |
+| 11 | `bsp.c` | bit-banged I2C never recovered a wedged bus; SDA sampled at the clock edge | one aborted transfer = every later read fails; marginal edges = random NACKs |
+| 12 | `bsp.c` / config | 250 kHz half-bit 2 us on jumper wires | marginal rise time |
+| 13 | defaults | overcurrent threshold 4.0 A vs sensor max 3.2 A | alarm could never fire |
+| 14 | web UI | `sstat` (sensor health) was sent but never shown | a dead sensor looked like a calm "0.000" |
+
+## What changed
+
+* **INA219**: PGA /8 (+-320 mV => +-3.2 A at 0.1 ohm), 8x hardware averaging, float
+  maths, config read-back verification, 0x40..0x4F auto-scan, saturation flag,
+  1 Hz `ina219_service()` that re-programs after a reset and re-probes when absent,
+  5 mA dead-band, current -> 0 + fault flag after ~0.5 s of failed reads.
+* **MPU6050**: device reset + verified wake, accepts clone WHO_AM_I, probes 0x68 and
+  0x69, rejects stuck/zero frames, detects frozen output, 1 Hz `mpu6050_service()`,
+  +-8 g range. Vibration is now the **3-axis RMS** of the high-passed acceleration
+  (per-axis baseline seeded from the first sample, so no start-up transient).
+* **I2C layer (`bsp.c`)**: every transfer retries once, freeing a stuck bus with the
+  9-clock recovery first; SDA sampled mid-clock; half-bit 3 us (~140 kHz).
+  `bsp_i2c_error_count()` / `bsp_i2c_recover_count()` added.
+* **Console**: new `[I2C] ...` line every 2 s: addresses found, bus voltage, raw shunt
+  count (and `CLIPPED` if at full scale), WHO_AM_I, bus error/recover counters. **Read
+  this line first** when a value looks wrong.
+* **Dashboard**: Current and Vibration cards now show a live `OK` / `FAULT` tag
+  (also on Temperature), values show `--` when their sensor is faulted. CLI `status`
+  lists all three sensors. Values already reached the page via `cur` / `vib` / `sstat`
+  in the status JSON; nothing in the wire protocol changed.
+* **Defaults**: overcurrent threshold 4.0 A -> 2.5 A on both MCUs (reachable by the
+  0.1 ohm INA219). A warning is printed if you set a threshold above the sensor range.
+* **Tests**: `tests/host/test_sensors.c` runs the real driver sources against a
+  simulated I2C bus (54 checks: no clipping at 0.4 A, clone WHO_AM_I, 0x69, hot-plug,
+  brown-out repair, frozen data, stuck-0xFF bus). `cd tests/host && make run`.
+
+## Hardware notes that code cannot fix
+
+* The INA219 sits **in series with the load** (VIN+ -> supply, VIN- -> load) and the
+  load/supply ground must be common with the STM32 ground. If VIN+/VIN- are swapped the
+  value is just negative (we rectify it), but a floating VIN- gives garbage.
+* DC only, <= 26 V, <= 3.2 A on the stock 0.1 ohm board. It is **not isolated** — never
+  use it on mains. For AC mains use an isolated sensor.
+* SDA/SCL need pull-ups (the GY-521 and most OLED boards have them; many INA219 boards do
+  not). Keep I2C wires short and 3V3 only. MPU6050 VCC at 3V3 (5 V on VCC is fine only
+  on boards with an onboard regulator, but SDA/SCL must stay 3V3).
+* Mount the MPU6050 rigidly on the machine body; a floppy mount measures the wire, not
+  the machine.
+
+---
+
+# Fix pass 3 — dashboard "not connected" / not refreshing
+
+* **Dashboard connection layer rewritten** (`Web/app.js`): WebSocket push plus an
+  always-running 1 s refresh loop. If no status arrived for 2.5 s it polls
+  `/api/status` (2.5 s timeout, no-store). A WebSocket that is open but silent for
+  6 s is closed and re-opened; reconnect back-off 1..5 s. History re-syncs every
+  minute and after any outage. Tab-visible / network-online events refresh
+  immediately. A yellow banner shows "Dashboard not connected ... last data: N s ago"
+  instead of silently freezing. Status rendering is exception-safe.
+* **ESP32 web server** (`http_server.c`): `lru_purge_enable` + 5 s socket timeouts.
+  Previously stale keep-alive sockets (browser + phone captive-portal probes) could
+  fill the 7-socket table and the page would stop loading until reboot.
+* **STM32**: periodic console status/diagnostic lines are skipped when the USB host is
+  not draining (`console_can_print_now()`), so an unopened terminal can no longer
+  stall the telemetry loop.
+
+---
+
+# Fix pass 4 — WiFi "Save & reboot" showed "Failed to fetch"
+
+* `wifi_manager_save_credentials()` restarted the ESP32 150 ms after the HTTP reply, which
+  often reset the connection before the browser read it. The restart now runs from a small
+  task 2 s later.
+* `/api/wifi/save` stores the credentials first and reports the real result (a storage
+  failure is no longer answered with "ok").
+* The setup form shows an inline message. A dropped connection right after saving is now
+  explained as "saved, ESP32 restarting" with the next steps, instead of an error pop-up.
+
+---
+
+# Fix pass 5 — dashboard disconnects, freezes and ESP32 crashes
+
+Found by reading the ESP32 firmware end to end:
+
+| # | Where | Bug | Symptom |
+|---|-------|-----|---------|
+| 1 | `websocket_server.c` | handler called `httpd_ws_recv_frame()` during the upgrade (GET) call | the single httpd thread blocked ~5 s per WebSocket connect, then the socket was closed: connect/drop loop, whole page frozen, "not connected" |
+| 2 | `wifi_manager.c` | `vTaskDelay()` (up to 10 s) inside the system event handler | WiFi/IP events stalled, reconnect looked stuck |
+| 3 | `wifi_manager.c` | after 10 failed reconnects the saved WiFi credentials were **erased** and the board rebooted into setup mode — even if it had been working for hours | a router reboot or weak-signal gap "crashed" the dashboard back to `monitor-setup` |
+| 4 | `wifi_manager.c` | modem power-save left on | late/timed-out pushes and polls |
+| 5 | `task_uart_tx` / `supervisor` / `wifi_poll` / `dns` stacks 2-3 KB (bytes, not words) | stack overflow on the first comm-fail log line / reboot command | random panics when the link flapped |
+| 6 | `task_dashboard.c` | 2.4 KB JSON buffer + float formatting on a 6 KB stack | marginal stack, possible overflow |
+| 7 | `json_util.c` | a NaN/inf float printed `nan` (invalid JSON) | browser silently dropped the whole status message => values stop updating |
+| 8 | `sdkconfig` | main task stack 3.5 KB | boot-time overflow risk |
+| 9 | status JSON | current/vibration printed with 2 decimals | 0.004 A / 0.004 g looked frozen at 0.00 |
+
+Fixes: WS handler returns immediately on the upgrade call; reconnect via one-shot esp_timer
+(no blocking), credentials are kept forever once a connection has worked this boot (only a
+never-connected board falls back to the setup AP); `esp_wifi_set_ps(WIFI_PS_NONE)`; stacks
+raised (TX/supervisor/wifi/dns 4 KB, dashboard 8 KB with the JSON buffer moved off the stack,
+httpd 10 KB, main task 8 KB); JSON writer turns NaN/inf into 0 and cur/vib use 3 decimals;
+status buffers 3.5 KB. Host tests: 53 + 54 pass.
+
+---
+
+## v5 — dashboard drops + WiFi credentials not working
+
+1. **Wrong password / 5 GHz / typo wiped the saved WiFi** (wifi_manager.c). After 10 failed
+   attempts the old code erased the credentials and rebooted into setup mode, so it looked like
+   "I entered it and nothing happened". Now credentials are kept, retries continue forever,
+   and the `monitor-setup` AP is opened *beside* the station so you can correct them.
+   The disconnect reason (wrong password / SSID not found) is printed on the serial monitor.
+2. **Auth threshold** was WPA/WPA2 only; open and WPA3 networks were rejected. Now any
+   network is accepted, all channels are scanned, strongest AP wins. Password field is optional.
+3. **Captive-portal DNS reply was malformed** (no name pointer, stray extra bytes, A answer
+   for AAAA queries). Phones judged the AP broken and dropped to mobile data mid-setup. Rewritten.
+4. **Dashboard dropped every few seconds**: httpd had only 7 sockets and purges the
+   "least recently used" one; the WebSocket never sends, so it was always the victim.
+   Sockets raised to 13 (LWIP_MAX_SOCKETS 16) and the page sends a ping every 8 s.
+5. **ESP32 rebooted itself 2 min after the STM32 went silent** (task_watchdog.c), taking the
+   dashboard down exactly when it should say "STM32 LINK DOWN". It now keeps serving.
+6. Hostname `health-monitor` set on the station interface.

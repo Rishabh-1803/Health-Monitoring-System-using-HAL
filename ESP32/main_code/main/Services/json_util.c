@@ -80,8 +80,23 @@ void jsonw_num(jsonw_t *w, double v)
     if (w == NULL) {
         return;
     }
-    char tmp[32];
-    (void)snprintf(tmp, sizeof(tmp), "%.2f", v);
+    jsonw_numf(w, v, 2);
+}
+
+void jsonw_numf(jsonw_t *w, double v, int decimals)
+{
+    if (w == NULL) {
+        return;
+    }
+    /* "nan" / "inf" are not valid JSON: one bad float would make the browser
+     * drop the entire status message and the dashboard would freeze. */
+    if (!(v == v) || v > 1e12 || v < -1e12) {
+        v = 0.0;
+    }
+    if (decimals < 0) { decimals = 0; }
+    if (decimals > 6) { decimals = 6; }
+    char tmp[48];
+    (void)snprintf(tmp, sizeof(tmp), "%.*f", decimals, v);
     jsonw_raw(w, tmp);
 }
 

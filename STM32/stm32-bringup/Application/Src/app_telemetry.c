@@ -86,12 +86,12 @@
 #define HB_PERIOD_MS            1000u   /* STM32 heartbeat to ESP32        */
 #define STATUS_PRINT_MS         500u    /* console status line (0.5 s)     */
 
-#define DS_READ_PERIOD_MS       2000u   /* temperature read interval       */
+#define DS_READ_PERIOD_MS       100u    /* gap between reads: with the ~800 ms conversion this gives ~1 reading/s */
 #define DS_CONVERT_WAIT_MS      800u    /* >= 750 ms worst-case conversion */
 
 
-#define ALARM_CONFIRM_MS        1500u   /* above threshold this long = on  */
-#define ALARM_CLEAR_MS          3000u   /* below clear level this long = off */
+#define ALARM_CONFIRM_MS        0u      /* 0 = alarm on the first sample at/above threshold (any spike) */
+#define ALARM_CLEAR_MS          1000u   /* below clear level this long = off */
 #define COMM_FAIL_MS            5000u   /* no packet from ESP32            */
 #define DS_FAIL_STREAK          5u      /* consecutive bad reads = fail    */
 
@@ -112,7 +112,9 @@
 #define OLED_REBUILD_MS         250u    /* framebuffer refresh interval    */
 #define EMA_TEMP                0.25f   /* temperature filter coefficient  */
 
-#define BUZZER_ON_ALARM_MS      3000u   /* buzzer duration on raise        */
+/* Buzzer sounds continuously while ANY of these alarms is active and
+ * stops by itself once they have all cleared (value back to normal). */
+#define BUZZER_ALARM_MASK       ALARM_BIT_ALL
 
 /* Relay trips on these alarms (the "industrial trip" set). */
 #define ALARM_TRIP_MASK         (ALARM_BIT_OVERTEMP | ALARM_BIT_OVERCURRENT)
@@ -140,8 +142,10 @@ typedef struct {
 /* ================================================================== */
 
 /* Filters + measured values */
-static float    s_temp_c        = 0.0f;
-static float    s_current_a     = 0.0f;
+static float    s_temp_c        = 0.0f;   /* smoothed: display / telemetry */
+static float    s_temp_raw      = 0.0f;   /* latest raw reading: alarm engine */
+static float    s_current_a     = 0.0f;   /* 8-sample average: display/telemetry */
+static float    s_current_raw   = 0.0f;   /* latest sample: alarm engine (catches single spikes) */
 static float    s_vib_g_est     = 0.0f;
 static bool     s_temp_valid    = false;
 
@@ -162,7 +166,8 @@ static alarm_channel_t s_alarms[3] = {
 };
 static uint8_t s_alarm_bits     = 0u;    /* composed ALARM_BIT_*         */
 static bool    s_comm_fail      = false;
-static bool    s_sensor_fail    = false;
+static bool    s_sensor_fail    = false;   /* DS18B20 specifically (temp validity) */
+static bool    s_module_fault   = false;   /* ANY module missing/faulty (INA219, MPU6050, DS18B20) */
 
 /* Link + protocol */
 static uint16_t s_seq_tel       = 0u;    /* telemetry sequence           */
@@ -174,7 +179,7 @@ static uint32_t s_sample_period_ms = 200u;
 static bool     s_led_green_override = false;  /* LED_ON command latched */
 static bool     s_led_green_state    = false;
 static bool     s_buzzer_muted       = false;
-static uint32_t s_buzzer_until       = 0u;
+static bool     s_buzzer_on          = false;
 static bool     s_relay_latched      = false;
 
 /* CPU load estimate: DWT cycles spent working vs wall period */
@@ -352,6 +357,7 @@ static void sample_current(void)
             s_cur_idx  = 0u;
             s_cur_full = false;
             s_current_a = 0.0f;
+            s_current_raw = 0.0f;
         }
         if (s_cur_fail >= CUR_OK_FAIL_TICKS) {
             s_ina219_ok = false;
@@ -371,6 +377,7 @@ static void sample_current(void)
         amps = 0.0f;                /* offset/noise floor, not load     */
     }
 
+    s_current_raw = amps;           /* un-averaged: a single spike counts */
     s_cur_buf[s_cur_idx] = amps;
     s_cur_idx = (s_cur_idx + 1u) % CUR_AVG_N;
     if (s_cur_idx == 0u) {
@@ -518,6 +525,7 @@ static void ds_tick(uint32_t now_ms)
         }
 
         float t = (float)milli_c / 1000.0f;
+        s_temp_raw = t;          /* alarms use this: no filter lag */
         if (!s_temp_valid) {
             s_temp_c = t;            /* first reading: seed the filter  */
             s_temp_valid = true;
@@ -540,7 +548,9 @@ static void ds_tick(uint32_t now_ms)
 
 static void alarm_engine_tick(uint32_t now_ms, uint32_t dt_ms)
 {
-    float values[3] = { s_temp_c, s_current_a, s_vib_g_est };
+    /* Temperature is judged on the raw reading (the smoothed value lags a
+     * real spike by many seconds and would delay or hide the alarm). */
+    float values[3] = { s_temp_raw, s_current_raw, s_vib_g_est };
 
     for (int ch = 0; ch < 3; ch++) {
         alarm_channel_t *a = &s_alarms[ch];
@@ -562,9 +572,6 @@ static void alarm_engine_tick(uint32_t now_ms, uint32_t dt_ms)
                     if ((1u << ch) & ALARM_TRIP_MASK) {
                         s_relay_latched = true;
                         bsp_relay_set(true);
-                    }
-                    if (!s_buzzer_muted) {
-                        s_buzzer_until = now_ms + BUZZER_ON_ALARM_MS;
                     }
                 }
             } else {
@@ -588,11 +595,22 @@ static void alarm_engine_tick(uint32_t now_ms, uint32_t dt_ms)
     }
 
     /* Sensor-fail alarm (bit 3) and comm-fail alarm (bit 4). */
-    bool sf = (s_ds_fail_streak >= DS_FAIL_STREAK);
-    if (sf != s_sensor_fail) {
-        s_sensor_fail = sf;
-        send_alarm_event(ALARM_BIT_SENSOR_FAIL, "sensor-fail", sf,
-                         (float)s_ds_fail_streak, 1);
+    bool ds_fail = (s_ds_fail_streak >= DS_FAIL_STREAK);
+    s_sensor_fail = ds_fail;                 /* temperature validity only */
+    /* ANY module missing or faulty (temperature, current or vibration
+     * sensor) raises the sensor-fail alarm and keeps the buzzer going until
+     * the module answers again. */
+    bool fault = ds_fail || !s_ina219_ok || !s_mpu6050_ok;
+    if (fault != s_module_fault) {
+        s_module_fault = fault;
+        send_alarm_event(ALARM_BIT_SENSOR_FAIL, "sensor-fail", fault,
+                         (float)((ds_fail ? 1u : 0u) | (s_ina219_ok ? 0u : 2u)
+                                 | (s_mpu6050_ok ? 0u : 4u)), 1);
+        (void)console_printf("[EVT] module fault %s: DS18B20 %s, INA219 %s, MPU6050 %s\r\n",
+                             fault ? "RAISED" : "CLEARED",
+                             ds_fail ? "FAIL" : "ok",
+                             s_ina219_ok ? "ok" : "FAIL",
+                             s_mpu6050_ok ? "ok" : "FAIL");
     }
     if (s_comm_fail != ((s_alarm_bits & ALARM_BIT_COMM_FAIL) != 0u)) {
         send_alarm_event(ALARM_BIT_COMM_FAIL, "comm-fail", s_comm_fail,
@@ -606,7 +624,7 @@ static void alarm_engine_tick(uint32_t now_ms, uint32_t dt_ms)
             bits |= (uint8_t)(1u << ch);
         }
     }
-    if (s_sensor_fail) {
+    if (s_module_fault) {
         bits |= ALARM_BIT_SENSOR_FAIL;
     }
     if (s_comm_fail) {
@@ -621,6 +639,7 @@ static void alarm_engine_tick(uint32_t now_ms, uint32_t dt_ms)
 
 static void outputs_tick(uint32_t now_ms, uint32_t tick_index)
 {
+    (void)now_ms;
     /* PC13: override (LED_ON) wins, else 1 Hz normal / fast on alarm. */
     if (s_led_green_override) {
         if (s_led_green_state != true) {
@@ -637,14 +656,21 @@ static void outputs_tick(uint32_t now_ms, uint32_t tick_index)
         }
     }
 
-    /* Buzzer: active until its deadline. */
-    if (s_buzzer_until != 0u) {
-        if (now_ms >= s_buzzer_until) {
-            s_buzzer_until = 0u;
-            bsp_buzzer_off();
-        } else {
+    /* Buzzer: on while any alarm in BUZZER_ALARM_MASK is active, off as
+     * soon as they have all cleared. A mute only lasts for the current
+     * alarm episode. */
+    bool want = ((s_alarm_bits & BUZZER_ALARM_MASK) != 0u);
+    if (!want) {
+        s_buzzer_muted = false;
+    }
+    if (want && !s_buzzer_muted) {
+        if (!s_buzzer_on) {
+            s_buzzer_on = true;
             bsp_buzzer_tone(BUZZER_DEFAULT_HZ);
         }
+    } else if (s_buzzer_on) {
+        s_buzzer_on = false;
+        bsp_buzzer_off();
     }
 }
 
@@ -729,6 +755,26 @@ static void apply_threshold(uint8_t id, float value)
             break;
         default:
             break;
+    }
+
+    /* A manual change takes effect immediately: restart the confirm/clear
+     * timers and re-judge the channel against the NEW limit right now
+     * instead of waiting for the old hysteresis state to play out. */
+    if (id <= THRESHOLD_ID_VIBRATION) {
+        alarm_channel_t *a = &s_alarms[id];
+        float cur = (id == 0u) ? s_temp_raw : (id == 1u) ? s_current_raw
+                                                         : s_vib_g_est;
+        a->above_ms = 0u;
+        a->below_ms = 0u;
+        if (a->active && cur < a->threshold) {
+            a->active = false;      /* raised above the live value: release */
+            send_alarm_event((uint8_t)(1u << id),
+                             (id == 0u) ? "overtemp" :
+                             (id == 1u) ? "overcurrent" : "vibration",
+                             false, cur, ALARM_VALUE_SCALE);
+        }
+        /* If cur >= new threshold and the channel is idle, the very next
+         * alarm_engine_tick (<= 10 ms) raises it (confirm time is 0). */
     }
 }
 
@@ -818,7 +864,7 @@ static void handle_packet(const decoded_packet_t *p, uint32_t now_ms)
 
     case MSG_CMD_BUZZER_OFF:
         s_buzzer_muted = true;
-        s_buzzer_until = 0u;
+        s_buzzer_on = false;
         bsp_buzzer_off();
         (void)console_println("[CMD] buzzer muted");
         send_ack(p->seq, p->type);
@@ -833,7 +879,7 @@ static void handle_packet(const decoded_packet_t *p, uint32_t now_ms)
         }
         s_sensor_fail = (s_ds_fail_streak >= DS_FAIL_STREAK);
         s_buzzer_muted = false;
-        s_buzzer_until = 0u;
+        s_buzzer_on = false;
         bsp_buzzer_off();
         s_relay_latched = false;
         bsp_relay_set(false);

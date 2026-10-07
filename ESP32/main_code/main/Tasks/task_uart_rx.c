@@ -24,6 +24,7 @@
 #include "protocol_types.h"
 #include "dashboard_data.h"
 #include "command_dispatcher.h"
+#include "task_dashboard.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -174,6 +175,10 @@ void task_uart_rx(void *arg)
                     msg[m] = '\0';
                     ESP_LOGI(TAG, "[STM32] %s", msg);
                     dashboard_data_debug_log_arrived(level, msg);
+                    if (strcmp(msg, "STM32 telemetry app booted") == 0) {
+                        /* STM32 restarted and lost its thresholds. */
+                        task_dashboard_request_resync();
+                    }
                 }
                 break;
             }

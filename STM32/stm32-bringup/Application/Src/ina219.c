@@ -7,8 +7,8 @@
  *   bit 13     BRNG  1      32 V bus range (12/24 V rails do not overflow)
  *   bits 12:11 PG    PGA    gain, from INA219_PGA_SETTING (3 = /8, +-320 mV)
  *   bits 10:7  BADC  0011   bus ADC, 12-bit, 1 sample (532 us)
- *   bits 6:3   SADC  1011   shunt ADC, 12-bit, 8-sample hardware average
- *                           (4.26 ms) -- this is the noise filter
+ *   bits 6:3   SADC  1001   shunt ADC, 12-bit, 2-sample hardware average
+ *                           (1.06 ms) -- short so single current spikes are seen
  *   bits 2:0   MODE  111    shunt + bus, continuous
  *
  * With PGA /8 and BRNG=1 this differs from the chip's power-on value
@@ -25,11 +25,11 @@
 #define CFG_BRNG_32V        (1u << 13)
 #define CFG_PGA(g)          ((uint16_t)(((uint16_t)(g) & 0x3u) << 11))
 #define CFG_BADC_12BIT      (0x3u << 7)
-#define CFG_SADC_12BIT_X8   (0xBu << 3)
+#define CFG_SADC_12BIT_X2   (0x9u << 3)
 #define CFG_MODE_CONT       0x7u
 
 #define INA219_CONFIG_VAL   ((uint16_t)(CFG_BRNG_32V | CFG_PGA(INA219_PGA_SETTING) | \
-                                        CFG_BADC_12BIT | CFG_SADC_12BIT_X8 |         \
+                                        CFG_BADC_12BIT | CFG_SADC_12BIT_X2 |         \
                                         CFG_MODE_CONT))
 #define INA219_RESET_BIT    0x8000u
 

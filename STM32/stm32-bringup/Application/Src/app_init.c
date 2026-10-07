@@ -404,3 +404,12 @@ void bringup_app_init(void)
     s_bringup_task = osThreadNew(bringup_task, NULL, &bringup_task_attr);
     (void)s_bringup_task;
 }
+
+/* FreeRTOS idle hook: the application loop sleeps in vTaskDelay, so the idle
+ * task owns ~99 % of the CPU. Without this it spins at full clock speed.
+ * WFI halts the core until the next interrupt (SysTick every 1 ms, UART,
+ * USB...), so nothing is delayed, but power use and switching noise drop. */
+void vApplicationIdleHook(void)
+{
+    __WFI();
+}

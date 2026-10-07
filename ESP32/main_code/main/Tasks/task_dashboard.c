@@ -39,7 +39,7 @@ static const char *TAG = "TASK_DASH";
 
 #define HIST_FLASH_EVERY_S  60u      /* one CSV line per minute       */
 
-static bool s_config_synced = false;
+static volatile bool s_config_synced = false;
 static uint32_t s_flash_counter = 0u;
 
 static void push_link_stats(void)
@@ -52,6 +52,11 @@ static void push_link_stats(void)
     command_dispatcher_get_stats(&retries, &timeouts);
 
     dashboard_data_set_link_stats(rx, crc, tx, retries, timeouts);
+}
+
+void task_dashboard_request_resync(void)
+{
+    s_config_synced = false;     /* next slow tick re-pushes thresholds + rate */
 }
 
 static void sync_config_once(void)
@@ -112,6 +117,12 @@ static void task_dashboard(void *arg)
             dashboard_data_note_esp_stats(esp_get_free_heap_size(),
                                           esp_get_minimum_free_heap_size(),
                                           system_stats_cpu_load());
+            /* Safety net: the STM32 keeps no thresholds across a reset, so
+             * re-push the stored values once a minute as well as on every
+             * STM32 boot message. */
+            if ((tick % (DASH_SLOW_EVERY * 60u)) == 0u) {
+                task_dashboard_request_resync();
+            }
             sync_config_once();
 
             if (++s_flash_counter >= HIST_FLASH_EVERY_S) {
